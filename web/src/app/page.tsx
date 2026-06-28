@@ -12,7 +12,11 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => setMounted(true), [])
+  useEffect(() => {
+    setMounted(true)
+    localStorage.removeItem("speaking-lab-view-as")
+    document.cookie = "view-as=; path=/; max-age=0; SameSite=Lax"
+  }, [])
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()

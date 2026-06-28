@@ -57,3 +57,20 @@ export async function POST(req: NextRequest) {
     return response;
   }
 }
+
+export async function GET() {
+  try {
+    const cookieStore = await cookies();
+    const token = cookieStore.get('session-token')?.value;
+    if (token) {
+      try {
+        await logout(token);
+      } catch {
+        // Manual browser reset should still clear cookies if the DB session is stale.
+      }
+    }
+  } catch {
+    // Fall through to a cookie-clearing redirect.
+  }
+  return redirectHome();
+}
