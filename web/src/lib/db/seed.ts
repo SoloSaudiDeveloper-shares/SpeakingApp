@@ -317,6 +317,7 @@ function seedProductionBootstrapAdmin(): void {
 function seedSanitizedDemoDatabase(): void {
   const marker = db.select().from(appSettings).where(eq(appSettings.key, 'demo_data_seeded_at')).get();
   if (marker) {
+    syncSanitizedDemoLoginPasswords();
     console.log('[seed] Sanitized demo data already present, skipping.');
     return;
   }
@@ -910,6 +911,35 @@ function seedSanitizedDemoDatabase(): void {
   upsertSetting('demo_student_task_ids', JSON.stringify(taskIds));
 
   console.log('[seed] Sanitized Railway demo data seeded successfully.');
+}
+
+function syncSanitizedDemoLoginPasswords(): void {
+  const demoPasswords = [
+    { username: 'admin', envName: 'DEMO_ADMIN_PASSWORD' },
+    { username: 'teacher', envName: 'DEMO_TEACHER_PASSWORD' },
+    { username: '1', envName: 'DEMO_STUDENT_PASSWORD' },
+  ];
+
+  for (const item of demoPasswords) {
+    const password = process.env[item.envName]?.trim();
+    if (!password) {
+      console.warn(`[seed] ${item.envName} is not set; leaving ${item.username} password unchanged.`);
+      continue;
+    }
+
+    const existing = db.select().from(userAccounts).where(eq(userAccounts.username, item.username)).get();
+    if (!existing) {
+      console.warn(`[seed] Demo account ${item.username} does not exist; password sync skipped.`);
+      continue;
+    }
+
+    if (!verifyPassword(password, existing.passwordHash)) {
+      db.update(userAccounts)
+        .set({ passwordHash: hashPassword(password) })
+        .where(eq(userAccounts.id, existing.id))
+        .run();
+    }
+  }
 }
 
 function ensureDemoLoginAccounts(): void {
