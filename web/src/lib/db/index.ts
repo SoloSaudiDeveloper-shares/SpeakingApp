@@ -4,10 +4,6 @@ import * as schema from './schema';
 import path from 'path';
 import fs from 'fs';
 
-const skipDbInit =
-  process.env.SPEAKING_LAB_SKIP_DB_INIT === '1' ||
-  process.env.NEXT_PHASE === 'phase-production-build';
-
 // Data directory:
 //   - In Electron production: process.env.SPEAKING_LAB_DATA_DIR points at the
 //     user's appData folder so the DB survives reinstalls/upgrades.
@@ -15,20 +11,17 @@ const skipDbInit =
 const dbDir = process.env.SPEAKING_LAB_DATA_DIR
   ? process.env.SPEAKING_LAB_DATA_DIR
   : path.join(process.cwd(), '..', 'data');
-if (!skipDbInit && !fs.existsSync(dbDir)) {
+if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const dbPath = skipDbInit ? ':memory:' : path.join(dbDir, 'speakinglab.db');
+const dbPath = path.join(dbDir, 'speakinglab.db');
 const sqlite = new Database(dbPath);
-sqlite.pragma('busy_timeout = 10000');
+sqlite.pragma('journal_mode = WAL');
+sqlite.pragma('foreign_keys = ON');
 
-if (!skipDbInit) {
-  sqlite.pragma('journal_mode = WAL');
-  sqlite.pragma('foreign_keys = ON');
-
-  // Create all tables if they don't exist
-  sqlite.exec(`
+// Create all tables if they don't exist
+sqlite.exec(`
   CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     unique_number TEXT NOT NULL UNIQUE,
@@ -461,7 +454,6 @@ if (!skipDbInit) {
     word, arabic_meaning, content=vocabulary_items, content_rowid=id
   );
 `);
-}
 
 /**
  * Idempotent column migrations.
@@ -483,24 +475,20 @@ function ensureColumn(table: string, column: string, definition: string) {
   }
 }
 
-if (!skipDbInit) {
-  // Phase 0 additive columns (rich fluency metrics + onboarding/diagnostic)
-  ensureColumn('attempts', 'metrics_json', 'TEXT');
-  ensureColumn('students', 'diagnostic_json', 'TEXT');
-  ensureColumn('students', 'onboarded_at', 'TEXT');
-  ensureColumn('homework_assignments', 'target_type', "TEXT NOT NULL DEFAULT 'class'");
-  ensureColumn('homework_assignments', 'student_ids_json', "TEXT NOT NULL DEFAULT '[]'");
-  ensureColumn('homework_assignments', 'klp_ids_json', "TEXT NOT NULL DEFAULT '[]'");
-  ensureColumn('homework_assignments', 'scenario_ids_json', "TEXT NOT NULL DEFAULT '[]'");
-  ensureColumn('homework_assignments', 'source', "TEXT NOT NULL DEFAULT 'manual'");
-  ensureColumn('homework_assignments', 'status', "TEXT NOT NULL DEFAULT 'assigned'");
-  ensureColumn('klp_generated_scenarios', 'progression_mode', "TEXT NOT NULL DEFAULT 'guided'");
-}
+// Phase 0 additive columns (rich fluency metrics + onboarding/diagnostic)
+ensureColumn('attempts', 'metrics_json', 'TEXT');
+ensureColumn('students', 'diagnostic_json', 'TEXT');
+ensureColumn('students', 'onboarded_at', 'TEXT');
+ensureColumn('homework_assignments', 'target_type', "TEXT NOT NULL DEFAULT 'class'");
+ensureColumn('homework_assignments', 'student_ids_json', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('homework_assignments', 'klp_ids_json', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('homework_assignments', 'scenario_ids_json', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('homework_assignments', 'source', "TEXT NOT NULL DEFAULT 'manual'");
+ensureColumn('homework_assignments', 'status', "TEXT NOT NULL DEFAULT 'assigned'");
+ensureColumn('klp_generated_scenarios', 'progression_mode', "TEXT NOT NULL DEFAULT 'guided'");
 
 export const db = drizzle(sqlite, { schema });
 export { sqlite };
 
 import { seedDatabase } from './seed';
-if (!skipDbInit) {
-  seedDatabase();
-}
+seedDatabase();

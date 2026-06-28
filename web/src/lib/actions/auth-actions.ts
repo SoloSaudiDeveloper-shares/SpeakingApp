@@ -19,17 +19,13 @@ export async function login(
   username: string,
   password: string
 ): Promise<{ user: SessionUser; token: string } | null> {
-  let user = db
+  const user = db
     .select()
     .from(userAccounts)
     .where(and(eq(userAccounts.username, username), eq(userAccounts.isActive, true)))
     .get();
 
   if (!user) return null;
-  if (process.env.DEMO_DATA_ENABLED === 'true') {
-    const synced = syncDemoPasswordForLogin(user, username, password);
-    if (synced) user = synced;
-  }
   if (!verifyPassword(password, user.passwordHash)) return null;
 
   // Generate session token
@@ -61,31 +57,6 @@ export async function login(
     },
     token,
   };
-}
-
-function syncDemoPasswordForLogin(
-  user: typeof userAccounts.$inferSelect,
-  username: string,
-  password: string
-): typeof userAccounts.$inferSelect | null {
-  const envKeyByUsername: Record<string, string> = {
-    admin: 'DEMO_ADMIN_PASSWORD',
-    teacher: 'DEMO_TEACHER_PASSWORD',
-    '1': 'DEMO_STUDENT_PASSWORD',
-  };
-  const envKey = envKeyByUsername[username];
-  const envPassword = envKey ? process.env[envKey]?.trim() : '';
-  if (!envPassword || password !== envPassword || verifyPassword(password, user.passwordHash)) {
-    return null;
-  }
-
-  const passwordHash = hashPassword(password);
-  db.update(userAccounts)
-    .set({ passwordHash })
-    .where(eq(userAccounts.id, user.id))
-    .run();
-
-  return { ...user, passwordHash };
 }
 
 export async function register(

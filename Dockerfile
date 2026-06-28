@@ -12,7 +12,6 @@ RUN npm ci
 
 FROM deps AS builder
 WORKDIR /app/web
-ENV SPEAKING_LAB_SKIP_DB_INIT=1
 COPY web ./
 RUN npm run build
 
