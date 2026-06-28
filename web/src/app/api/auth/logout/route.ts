@@ -3,30 +3,57 @@ import { logout } from '@/lib/actions/auth-actions';
 import { NextRequest, NextResponse } from 'next/server';
 
 function redirectHome() {
-  return new NextResponse(null, {
+  const response = new NextResponse(null, {
     status: 303,
     headers: {
       Location: '/',
     },
   });
+  clearAuthCookies(response);
+  return response;
+}
+
+function clearAuthCookies(response: NextResponse) {
+  response.cookies.set('session-token', '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.SESSION_COOKIE_SECURE === 'true',
+    path: '/',
+    maxAge: 0,
+  });
+  response.cookies.set('view-as', '', {
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 0,
+  });
 }
 
 export async function POST(req: NextRequest) {
+  const accept = req.headers.get('accept') || '';
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get('session-token')?.value;
     if (token) {
-      await logout(token);
+      try {
+        await logout(token);
+      } catch {
+        // A stale cookie should not stop the browser from being logged out.
+      }
     }
-    cookieStore.delete('session-token');
 
     // If form submission, redirect to login page
-    const accept = req.headers.get('accept') || '';
     if (accept.includes('text/html')) {
       return redirectHome();
     }
-    return Response.json({ success: true });
+    const response = NextResponse.json({ success: true });
+    clearAuthCookies(response);
+    return response;
   } catch {
-    return redirectHome();
+    if (accept.includes('text/html')) {
+      return redirectHome();
+    }
+    const response = NextResponse.json({ success: true });
+    clearAuthCookies(response);
+    return response;
   }
 }

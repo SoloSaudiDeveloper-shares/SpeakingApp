@@ -38,6 +38,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
   const [viewAsRole, setViewAsRoleState] = useState<RoleView>(null)
 
+  const clearClientAuthState = useCallback(() => {
+    setViewAsRoleState(null)
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(VIEW_AS_KEY)
+      document.cookie = "view-as=; path=/; max-age=0; SameSite=Lax"
+      document.cookie = "session-token=; path=/; max-age=0; SameSite=Lax"
+    }
+  }, [])
+
   // Restore view-as mode from localStorage on mount. Only learner preview needs
   // a cookie because server routes use it to resolve a sample student id.
   useEffect(() => {
@@ -78,13 +87,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(data.user)
       } else {
         setUser(null)
+        clearClientAuthState()
       }
     } catch {
       setUser(null)
+      clearClientAuthState()
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [clearClientAuthState])
 
   useEffect(() => {
     refreshUser()
@@ -135,8 +146,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await fetch("/api/auth/logout", { method: "POST" })
     } catch { /* ignore */ }
     setUser(null)
-    setViewAsRole(null)
-  }, [setViewAsRole])
+    clearClientAuthState()
+  }, [clearClientAuthState])
 
   const role = user?.role?.toLowerCase() ?? ""
 
