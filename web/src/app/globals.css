@@ -1,0 +1,289 @@
+@import "tailwindcss";
+
+/* ─── Design System Tokens ─────────────────────────────────────────────────── */
+
+:root {
+  /* Base colors (light mode) */
+  --background:         oklch(0.98 0.002 240);
+  --foreground:         oklch(0.13 0.012 240);
+
+  --card:               oklch(1 0 0);
+  --card-foreground:    oklch(0.13 0.012 240);
+
+  --primary:            oklch(0.55 0.22 264);
+  --primary-foreground: oklch(0.99 0 0);
+
+  --secondary:          oklch(0.94 0.006 240);
+  --secondary-foreground: oklch(0.25 0.012 240);
+
+  --muted:              oklch(0.95 0.005 240);
+  --muted-foreground:   oklch(0.52 0.012 240);
+
+  --accent:             oklch(0.93 0.01 264);
+  --accent-foreground:  oklch(0.25 0.012 240);
+
+  --destructive:        oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --border:             oklch(0.88 0.006 240);
+  --input:              oklch(0.88 0.006 240);
+  --ring:               oklch(0.55 0.22 264);
+
+  /* Sidebar tokens */
+  --sidebar:            oklch(0.13 0.015 255);
+  --sidebar-foreground: oklch(0.82 0.01 240);
+  --sidebar-border:     oklch(0.22 0.015 255);
+  --sidebar-accent:     oklch(0.20 0.02 264);
+
+  /* Radius */
+  --radius: 0.5rem;
+}
+
+/* ─── Dark Theme ────────────────────────────────────────────────────────────── */
+
+.dark {
+  --background:         oklch(0.10 0.008 240);
+  --foreground:         oklch(0.93 0.008 240);
+
+  --card:               oklch(0.14 0.010 240);
+  --card-foreground:    oklch(0.93 0.008 240);
+
+  --primary:            oklch(0.62 0.22 264);
+  --primary-foreground: oklch(0.99 0 0);
+
+  --secondary:          oklch(0.18 0.010 240);
+  --secondary-foreground: oklch(0.88 0.008 240);
+
+  --muted:              oklch(0.18 0.008 240);
+  --muted-foreground:   oklch(0.52 0.012 240);
+
+  --accent:             oklch(0.20 0.018 264);
+  --accent-foreground:  oklch(0.88 0.008 240);
+
+  --destructive:        oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --border:             oklch(0.22 0.010 240);
+  --input:              oklch(0.22 0.010 240);
+  --ring:               oklch(0.62 0.22 264);
+
+  --sidebar:            oklch(0.09 0.012 255);
+  --sidebar-foreground: oklch(0.80 0.010 240);
+  --sidebar-border:     oklch(0.18 0.012 255);
+  --sidebar-accent:     oklch(0.16 0.018 264);
+}
+
+/* ─── Accent Theme Overrides ────────────────────────────────────────────────── */
+
+[data-accent="blue"] {
+  --primary:  oklch(0.55 0.22 264);
+  --ring:     oklch(0.55 0.22 264);
+}
+
+[data-accent="blue"].dark,
+.dark [data-accent="blue"] {
+  --primary:  oklch(0.62 0.22 264);
+  --ring:     oklch(0.62 0.22 264);
+}
+
+[data-accent="green"] {
+  --primary:  oklch(0.55 0.18 152);
+  --ring:     oklch(0.55 0.18 152);
+}
+
+[data-accent="green"].dark,
+.dark [data-accent="green"] {
+  --primary:  oklch(0.62 0.18 152);
+  --ring:     oklch(0.62 0.18 152);
+}
+
+[data-accent="purple"] {
+  --primary:  oklch(0.52 0.24 300);
+  --ring:     oklch(0.52 0.24 300);
+}
+
+[data-accent="purple"].dark,
+.dark [data-accent="purple"] {
+  --primary:  oklch(0.60 0.24 300);
+  --ring:     oklch(0.60 0.24 300);
+}
+
+[data-accent="gold"] {
+  --primary:  oklch(0.60 0.16 75);
+  --ring:     oklch(0.60 0.16 75);
+}
+
+[data-accent="gold"].dark,
+.dark [data-accent="gold"] {
+  --primary:  oklch(0.68 0.16 75);
+  --ring:     oklch(0.68 0.16 75);
+}
+
+/* ─── Tailwind v4 Theme Mapping ─────────────────────────────────────────────── */
+
+@theme inline {
+  --color-background:           var(--background);
+  --color-foreground:           var(--foreground);
+  --color-card:                 var(--card);
+  --color-card-foreground:      var(--card-foreground);
+  --color-primary:              var(--primary);
+  --color-primary-foreground:   var(--primary-foreground);
+  --color-secondary:            var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted:                var(--muted);
+  --color-muted-foreground:     var(--muted-foreground);
+  --color-accent:               var(--accent);
+  --color-accent-foreground:    var(--accent-foreground);
+  --color-destructive:          var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border:               var(--border);
+  --color-input:                var(--input);
+  --color-ring:                 var(--ring);
+  --color-sidebar:              var(--sidebar);
+  --color-sidebar-foreground:   var(--sidebar-foreground);
+  --color-sidebar-border:       var(--sidebar-border);
+  --color-sidebar-accent:       var(--sidebar-accent);
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+}
+
+/* ─── Base Styles ────────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  border-color: var(--border);
+}
+
+html {
+  height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100%;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+/* ─── RTL / Arabic Support ─────────────────────────────────────────────────── */
+
+html[dir="rtl"] body {
+  font-family: "Noto Naskh Arabic", "Geeza Pro", "Tahoma", var(--font-sans);
+}
+
+html[dir="rtl"] .font-arabic {
+  font-family: "Noto Naskh Arabic", "Geeza Pro", "Tahoma", system-ui, sans-serif;
+}
+
+.font-arabic {
+  font-family: "Noto Naskh Arabic", "Geeza Pro", "Tahoma", system-ui, sans-serif;
+}
+
+/* Mirror chevrons in RTL */
+html[dir="rtl"] .chevron-flip {
+  transform: scaleX(-1);
+}
+
+/* ─── Animations ─────────────────────────────────────────────────────────────── */
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ─── Animation Utility Classes ─────────────────────────────────────────────── */
+
+.animate-page-enter {
+  animation: page-enter 0.3s ease-out both;
+}
+
+.animate-fade-in-scale {
+  animation: fade-in-scale 0.25s ease-out both;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out both;
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.25s ease-out both;
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-foreground);
+}
+
+/* ─── Focus Ring ─────────────────────────────────────────────────────────────── */
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* ─── Selection ──────────────────────────────────────────────────────────────── */
+
+::selection {
+  background-color: color-mix(in oklch, var(--primary) 20%, transparent);
+  color: var(--foreground);
+}
