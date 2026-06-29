@@ -34,9 +34,16 @@ function weakestSkill(profile: DiagnosticProfile) {
   return entries[0] ? `${entries[0][0]} is the current focus.` : "Keep practicing all modes to maintain balance."
 }
 
+function isPracticePathItem(value: unknown): value is { title: string; href: string; reason?: string } {
+  return !!value
+    && typeof value === "object"
+    && typeof (value as { title?: unknown }).title === "string"
+    && typeof (value as { href?: unknown }).href === "string"
+}
+
 export function SpeakingProfileWidget({ data }: Props) {
   const profile = data.diagnostic
-  const firstStep = profile?.recommendedPracticePath?.[0]
+  const firstStep = profile?.recommendedPracticePath?.find(isPracticePathItem)
 
   if (!profile) {
     return (

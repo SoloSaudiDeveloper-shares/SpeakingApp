@@ -6,6 +6,67 @@ import { db, sqlite } from '@/lib/db';
 import { students } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 
+type PracticePathItem = {
+  title: string;
+  href: string;
+  reason: string;
+};
+
+const LEGACY_PRACTICE_PATH_ITEMS: Record<string, PracticePathItem> = {
+  repeat: {
+    title: 'Repeat practice',
+    href: '/practice?stage=repeat',
+    reason: 'Build clearer sound imitation first.',
+  },
+  'read aloud': {
+    title: 'Read aloud',
+    href: '/practice?stage=read-aloud',
+    reason: 'Practice full-word decoding with visible text.',
+  },
+  sentence: {
+    title: 'Sentence practice',
+    href: '/practice?stage=sentence',
+    reason: 'Build complete sentences before open speech.',
+  },
+  'free speak': {
+    title: 'Free Speak',
+    href: '/practice?stage=free-speak',
+    reason: 'Use vocabulary in your own sentence.',
+  },
+  scenario: {
+    title: 'Scenario practice',
+    href: '/practice/conversation?mode=scenarios',
+    reason: 'Practice target language in a guided conversation.',
+  },
+};
+
+function normalizePracticePathItem(value: unknown): PracticePathItem | null {
+  if (typeof value === 'string') {
+    return LEGACY_PRACTICE_PATH_ITEMS[value.trim().toLowerCase()] ?? null;
+  }
+  if (!value || typeof value !== 'object') return null;
+
+  const item = value as Record<string, unknown>;
+  if (typeof item.title !== 'string' || typeof item.href !== 'string') return null;
+  return {
+    title: item.title,
+    href: item.href,
+    reason: typeof item.reason === 'string' ? item.reason : 'Continue your recommended practice path.',
+  };
+}
+
+function normalizeDiagnostic(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const diagnostic = { ...(value as Record<string, unknown>) };
+  if (Array.isArray(diagnostic.recommendedPracticePath)) {
+    diagnostic.recommendedPracticePath = diagnostic.recommendedPracticePath
+      .map(normalizePracticePathItem)
+      .filter((item): item is PracticePathItem => item !== null);
+  }
+  return diagnostic;
+}
+
 export async function GET() {
   try {
     const cookieStore = await cookies();
@@ -74,7 +135,7 @@ export async function GET() {
     let diagnostic = null;
     if (student?.diagnosticJson) {
       try {
-        diagnostic = JSON.parse(student.diagnosticJson);
+        diagnostic = normalizeDiagnostic(JSON.parse(student.diagnosticJson));
       } catch {
         diagnostic = null;
       }
