@@ -5,15 +5,19 @@ export const runtime = 'nodejs';
 
 export async function POST(request: Request) {
   try {
-    const auth = await requireKlpUser(['Admin']);
+    const auth = await requireKlpUser();
     if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
 
     const url = new URL(request.url);
     const commit = url.searchParams.get('commit') === 'true';
     const form = await request.formData();
     const file = form.get('file');
-    if (!(file instanceof File)) return Response.json({ error: 'Upload an .xlsx file.' }, { status: 400 });
+    if (!(file instanceof File)) return Response.json({ error: 'Upload an .xlsx or .xlsm workbook.' }, { status: 400 });
+    if (!/\.(xlsx|xlsm)$/i.test(file.name)) {
+      return Response.json({ error: 'Upload an .xlsx or .xlsm workbook. Legacy .xls files are not supported.' }, { status: 400 });
+    }
     const buffer = Buffer.from(await file.arrayBuffer());
+    if (buffer.length === 0) return Response.json({ error: 'The selected workbook is empty.' }, { status: 400 });
     if (commit) {
       const imported = importKlpWorkbook({
         buffer,

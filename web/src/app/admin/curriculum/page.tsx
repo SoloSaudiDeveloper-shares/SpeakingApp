@@ -176,6 +176,7 @@ export default function AdminCurriculumPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [busy, setBusy] = useState(false)
+  const [busyAction, setBusyAction] = useState<"validate-import" | "commit-import" | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [q, setQ] = useState("")
   const [book, setBook] = useState("")
@@ -274,9 +275,17 @@ export default function AdminCurriculumPage() {
   }
 
   async function submitWorkbook(commit: boolean) {
-    if (!selectedFile) return
+    if (!selectedFile) {
+      setMessage("Choose an .xlsx or .xlsm workbook first.")
+      return
+    }
+    if (!/\.(xlsx|xlsm)$/i.test(selectedFile.name)) {
+      setMessage("Choose an .xlsx or .xlsm workbook. Legacy .xls files are not supported.")
+      return
+    }
     setBusy(true)
-    setMessage(null)
+    setBusyAction(commit ? "commit-import" : "validate-import")
+    setMessage(commit ? "Importing workbook..." : "Validating workbook...")
     try {
       const body = new FormData()
       body.set("file", selectedFile)
@@ -285,19 +294,28 @@ export default function AdminCurriculumPage() {
         method: "POST",
         body,
       })
-      const json = await res.json()
+      const text = await res.text()
+      let json: Record<string, unknown> = {}
+      try {
+        json = text ? JSON.parse(text) : {}
+      } catch {
+        json = { error: text || `KLP import failed with HTTP ${res.status}.` }
+      }
       if (!res.ok) {
-        setMessage(json.error ?? "KLP import failed.")
+        setMessage(typeof json.error === "string" ? json.error : `KLP import failed with HTTP ${res.status}.`)
         return
       }
-      setPreview(json)
+      setPreview(json as ImportPreview)
       setMessage(commit ? "Workbook imported and KLP features are enabled." : "Workbook validation completed.")
       if (commit) {
         await loadOverview()
         await loadConcepts()
       }
+    } catch (error) {
+      setMessage(error instanceof Error ? `KLP import failed: ${error.message}` : "KLP import failed.")
     } finally {
       setBusy(false)
+      setBusyAction(null)
     }
   }
 
@@ -310,6 +328,12 @@ export default function AdminCurriculumPage() {
         body: JSON.stringify({ enabled }),
       })
       if (res.ok) setOverview(await res.json())
+      else {
+        const json = await res.json().catch(() => null)
+        setMessage(json?.error ?? "Only admins can change the KLP feature switch.")
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? `KLP feature update failed: ${error.message}` : "KLP feature update failed.")
     } finally {
       setBusy(false)
     }
@@ -462,7 +486,7 @@ export default function AdminCurriculumPage() {
                 onClick={() => submitWorkbook(false)}
                 className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-50"
               >
-                {busy ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                {busyAction === "validate-import" ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
                 Validate
               </button>
               <button
@@ -470,7 +494,7 @@ export default function AdminCurriculumPage() {
                 onClick={() => submitWorkbook(true)}
                 className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
-                <CheckCircle2 size={15} />
+                {busyAction === "commit-import" ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                 Commit import
               </button>
             </div>

@@ -206,9 +206,59 @@ function normalize(value: unknown) {
   return String(value ?? '').trim();
 }
 
-function rowObjects(rows: SheetRows): Record<string, string>[] {
-  const [header, ...body] = rows;
-  const headers = (header ?? []).map(normalize);
+function headerKey(value: unknown) {
+  return normalize(value).toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+const CANONICAL_HEADERS: Record<string, string> = {
+  conceptid: 'ConceptID',
+  book: 'Book',
+  lesson: 'Lesson',
+  conceptnumber: 'Concept Number',
+  subdivision: 'Subdivision',
+  basevocabularyitem: 'Base Vocabulary Item',
+  vocabularysubtype: 'Vocabulary Subtype',
+  basegrammaritem: 'Base Grammar Item',
+  grammarsubtype: 'Grammar Subtype',
+  basefunctionitem: 'Base Function Item',
+  functionsubtype: 'Function Subtype',
+  baseskillitem: 'Base Skill Item',
+  skillsubtype: 'Skill Subtype',
+  partofspeech: 'Part of Speech',
+  definition: 'Definition',
+  dliclassification: 'DLI Classification',
+  primaryskilltype: 'Primary Skill Type',
+  secondaryskilltype: 'Secondary Skill Type',
+  tertiaryskilltype: 'Tertiary Skill Type',
+  quaternaryskilltype: 'Quaternary Skill Type',
+  duplicateincourse: 'Duplicate in Course',
+  duplicateinbook: 'Duplicate in Book',
+  questionid: 'question_id',
+  questionshape: 'question_shape',
+  modality: 'modality',
+};
+
+function canonicalHeader(value: unknown) {
+  const raw = normalize(value);
+  return CANONICAL_HEADERS[headerKey(raw)] ?? raw;
+}
+
+function findHeaderIndex(rows: SheetRows, requiredHeaders: string[]) {
+  if (requiredHeaders.length === 0) return 0;
+  const required = new Set(requiredHeaders.map(headerKey));
+  const maxRows = Math.min(rows.length, 25);
+  for (let i = 0; i < maxRows; i += 1) {
+    const present = new Set((rows[i] ?? []).map(canonicalHeader).map(headerKey));
+    if ([...required].every((key) => present.has(key))) return i;
+  }
+  return 0;
+}
+
+function rowObjects(rows: SheetRows, requiredHeaders: string[] = []): Record<string, string>[] {
+  const headerIndex = findHeaderIndex(rows, requiredHeaders);
+  const header = rows[headerIndex] ?? [];
+  const body = rows.slice(headerIndex + 1);
+  const headers = header.map(canonicalHeader);
   return body
     .map((row) => {
       const obj: Record<string, string> = {};
@@ -218,6 +268,23 @@ function rowObjects(rows: SheetRows): Record<string, string>[] {
       return obj;
     })
     .filter((row) => Object.values(row).some(Boolean));
+}
+
+function sheetKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function findSheetRows(sheets: Record<string, SheetRows>, candidates: string[]) {
+  const entries = Object.entries(sheets);
+  const wanted = candidates.map(sheetKey);
+  for (const [name, rows] of entries) {
+    if (wanted.includes(sheetKey(name))) return rows;
+  }
+  for (const [name, rows] of entries) {
+    const key = sheetKey(name);
+    if (wanted.some((candidate) => key.includes(candidate))) return rows;
+  }
+  return null;
 }
 
 function supportStatus(domain: KlpDomain, row: Record<string, string>): KlpSupportStatus {
@@ -278,21 +345,21 @@ function modalityFromQuestionId(questionId: string) {
 export function parseAlcKlpWorkbook(buffer: Buffer): ParsedKlpWorkbook {
   const sheets = readXlsxSheets(buffer);
   const warnings: string[] = [];
-  const domains: Array<[KlpDomain, string]> = [
-    ['Vocabulary', 'Vocabulary'],
-    ['Grammar', 'Grammar'],
-    ['Functions', 'Functions'],
-    ['Skills', 'Skills'],
+  const domains: Array<[KlpDomain, string[]]> = [
+    ['Vocabulary', ['Vocabulary', 'Vocab', 'Vocabulary KLPs']],
+    ['Grammar', ['Grammar', 'Grammar KLPs']],
+    ['Functions', ['Functions', 'Function', 'Function KLPs']],
+    ['Skills', ['Skills', 'Skill', 'Skills KLPs']],
   ];
   const concepts: ParsedKlpConcept[] = [];
 
-  for (const [domain, sheetName] of domains) {
-    const rows = sheets[sheetName];
+  for (const [domain, sheetNames] of domains) {
+    const rows = findSheetRows(sheets, sheetNames);
     if (!rows) {
-      warnings.push(`Missing sheet: ${sheetName}`);
+      warnings.push(`Missing sheet: ${sheetNames[0]}`);
       continue;
     }
-    for (const row of rowObjects(rows)) {
+    for (const row of rowObjects(rows, ['ConceptID'])) {
       const concept = conceptFromRow(domain, row);
       if (concept) concepts.push(concept);
     }
@@ -301,8 +368,9 @@ export function parseAlcKlpWorkbook(buffer: Buffer): ParsedKlpWorkbook {
   const conceptMap = new Map(concepts.map((concept) => [concept.conceptId, concept]));
   const activeQuestionShapes: ParsedKlpQuestionShape[] = [];
   const unmatched: string[] = [];
-  const questionRows = sheets.active_question_shapes ? rowObjects(sheets.active_question_shapes) : [];
-  if (!sheets.active_question_shapes) warnings.push('Missing sheet: active_question_shapes');
+  const activeQuestionSheet = findSheetRows(sheets, ['active_question_shapes', 'Active Question Shapes', 'Question Shapes']);
+  const questionRows = activeQuestionSheet ? rowObjects(activeQuestionSheet, ['question_id', 'question_shape']) : [];
+  if (!activeQuestionSheet) warnings.push('Missing sheet: active_question_shapes');
 
   for (const row of questionRows) {
     const questionId = normalize(row.question_id);
