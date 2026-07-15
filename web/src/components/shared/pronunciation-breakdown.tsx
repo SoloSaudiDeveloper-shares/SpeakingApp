@@ -26,7 +26,7 @@ export function PronunciationBreakdown({ words }: { words: WordScore[] }) {
     <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
       <div className="mb-2.5 flex items-center gap-2">
         <Mic size={14} className="text-primary" />
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Pronunciation — sound by sound</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sound detail · word and phoneme accuracy</h3>
       </div>
 
       {/* Per-word accuracy */}

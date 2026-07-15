@@ -163,6 +163,7 @@ export default function PracticePage() {
   const { user } = useAuth()
   const urlStage = searchParams.get("stage")
   const urlWordId = searchParams.get("wordId")
+  const assignmentId = searchParams.get("assignmentId")
   const [data, setData] = useState<PracticeData | null>(null)
   const [loading, setLoading] = useState(true)
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -215,6 +216,7 @@ export default function PracticePage() {
 
   // Pause detection - configurable from admin STT settings
   const [pauseWarningSeconds, setPauseWarningSeconds] = useState(3)
+  const [scoredPauseThresholdMs, setScoredPauseThresholdMs] = useState(1000)
   const [hasWebGPU, setHasWebGPU] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -243,6 +245,7 @@ export default function PracticePage() {
         const sec = Number(s.stt_pause_warning_seconds)
         if (!Number.isNaN(sec) && sec > 0) setPauseWarningSeconds(sec)
       }
+      if (s.stt_scored_pause_threshold_ms) setScoredPauseThresholdMs(Math.max(500, Math.min(3000, Number(s.stt_scored_pause_threshold_ms))))
     }).catch(() => {})
 
     fetch("/api/practice").then(r => r.json()).then(d => {
@@ -250,7 +253,10 @@ export default function PracticePage() {
       if (d?.tasks?.length) {
         const requestedWordId = urlWordId ? Number(urlWordId) : 0
         if (Number.isInteger(requestedWordId) && requestedWordId > 0) {
-          const wordIdx = d.tasks.findIndex((t: Task) => t.vocabularyItemId === requestedWordId)
+          const wordIdx = d.tasks.findIndex((t: Task) =>
+            t.vocabularyItemId === requestedWordId
+            && (!urlStage || resolveStage(t.taskType, urlStage) === urlStage),
+          )
           if (wordIdx >= 0) {
             setCurrentIndex(wordIdx)
             return
@@ -482,6 +488,8 @@ export default function PracticePage() {
         transcript: actualTranscript,
         audioDurationSeconds: durationSec,
         pauseEvents: pauseEventsRef.current,
+        wordTimings: result.wordTimings,
+        scoredPauseThresholdMs,
         cefrBand: cefr,
       })
       setMetrics(fluencyMetrics)
@@ -512,6 +520,7 @@ export default function PracticePage() {
       let finalTranscript = actualTranscript
       let freeSpeakMetadata: FreeSpeakMetadata | null = null
       let pronunciationWeakWords: PronunciationWeakWordEvidence[] = []
+      let pronunciationAssessment: unknown = null
 
       // Grab the recording (for playback + Azure).
       const recordingBlob = await recordingBlobPromise
@@ -534,6 +543,7 @@ export default function PracticePage() {
           setAzureWords(null)
           setSttError({ engine: "Azure", message: "We couldn't make out clear speech for this word — please try again." })
         } else if (azure) {
+          pronunciationAssessment = azure
           setSttError(null)
           // NEVER replace what the learner actually said with Azure's text.
           // Azure runs WITH the reference word, so its recognized text is
@@ -631,6 +641,8 @@ export default function PracticePage() {
               expectedText: stageTarget,
               freeSpeak: freeSpeakMetadata,
               pronunciationWeakWords,
+              pronunciationAssessment,
+              pronunciationProvider: pronunciationAssessment ? "azure" : "basic-transcript",
             }),
           }),
         })
@@ -666,7 +678,7 @@ export default function PracticePage() {
       setScores(errScore)
       setFeedback(generateFeedback(errScore, "", currentVocab?.word ? [currentVocab.word] : [], 0))
     } finally { setSubmitting(false) }
-  }, [currentVocab, currentTask, data, engineId, recordingTime, stage, stageExpectedAnswers, stageTarget])
+  }, [currentVocab, currentTask, data, engineId, recordingTime, scoredPauseThresholdMs, stage, stageExpectedAnswers, stageTarget])
 
   const clearRecordedAudio = () => {
     if (recordedAudioUrl) {
@@ -677,6 +689,10 @@ export default function PracticePage() {
   const handleNext = () => {
     clearRecordedAudio()
     setScores(null); setListenDone(false); setRevealed(false); setFeedback(null); setMetrics(null); setFreeSpeakMeta(null); setAzureWords(null); setTranscript(null); setRecordingTime(0); setSttError(null)
+    if (assignmentId) {
+      router.push("/practice/hub")
+      return
+    }
     if (data?.tasks && currentIndex < data.tasks.length - 1) setCurrentIndex(i => i + 1)
     else router.push("/practice/hub")
   }
@@ -996,7 +1012,11 @@ export default function PracticePage() {
               />
             </div>
           )}
-          {azureWords && azureWords.length > 0 && <PronunciationBreakdown words={azureWords} />}
+          {stage !== "free-speak" && scores && (
+            azureWords && azureWords.length > 0
+              ? <PronunciationBreakdown words={azureWords} />
+              : <div className="rounded-lg border border-border bg-card p-4 shadow-sm"><div className="flex items-center gap-2"><Mic size={14} className="text-primary" /><h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sound detail</h3></div><p className="mt-2 text-sm text-muted-foreground">{azureConfigured ? "Azure phoneme detail was unavailable for this attempt, so only basic transcript scoring was used." : "Azure Pronunciation Assessment is not configured. This attempt used basic transcript scoring, so word-by-word phoneme detail is not available."}</p></div>
+          )}
           {/* Fluency metrics only make sense for multi-word tasks (sentences/free speech) */}
           {metrics && metrics.wordCount > 1 && (stageMeta.mode === "sentence" || stageMeta.mode === "free") && <FluencyMetricsCard metrics={metrics} />}
           {feedback && (

@@ -1,6 +1,10 @@
 export interface SpeechRecognitionResult {
   transcript: string;
   confidence: number;
+  wordTimings?: Array<{ word: string; start: number; end: number }>;
+  audioDurationSeconds?: number;
+  audioBlob?: Blob;
+  partial?: boolean;
   /** When set, indicates a structured failure (e.g. network, no-speech, model-load). */
   errorCode?: SpeechErrorCode;
   /** Human-readable error message. */
@@ -31,6 +35,8 @@ export interface SpeechEngine {
   /** Optionally warm up the engine (e.g. load the offline model) ahead of the
    *  first recording so there's no cold-start delay. Safe to call repeatedly. */
   prepare?(): Promise<void>;
+  /** Re-run recognition on a preserved recording after a recoverable failure. */
+  transcribeBlob?(blob: Blob): Promise<SpeechRecognitionResult>;
 }
 
 export type STTEngineId =

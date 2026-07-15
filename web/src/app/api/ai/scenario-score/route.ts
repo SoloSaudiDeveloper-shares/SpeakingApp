@@ -2,10 +2,13 @@ import { cookies } from 'next/headers';
 import { getSessionFromToken } from '@/lib/actions/auth-actions';
 import { callChat } from '@/lib/ai/providers';
 import { getScenario } from '@/lib/ai/scenarios';
-import { recordScenarioAttempt } from '@/lib/actions/scenario-actions';
+import { findScenarioAttemptBySession, recordScenarioAttempt } from '@/lib/actions/scenario-actions';
+import { nanoid } from 'nanoid';
 import { getGeneratedScenario, recordScenarioKlpResults } from '@/lib/actions/klp-actions';
 import { applyLocalScenarioGuard, heuristicScenarioGrade } from '@/lib/ai/scenario-grading';
 import type { ScenarioGrade } from '@/lib/ai/scenario-grading';
+import { after } from 'next/server';
+import { drainXapiOutbox } from '@/lib/integrations/xapi';
 
 const SCENARIO_GRADER_TIMEOUT_MS = 15000;
 
@@ -28,6 +31,7 @@ export async function POST(request: Request) {
     if (!scenario) return Response.json({ error: 'Unknown scenario.' }, { status: 400 });
 
     const messages: { role: 'user' | 'assistant'; content: string }[] = Array.isArray(body.messages) ? body.messages : [];
+    const sessionId = typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : nanoid(32);
     const persistMode: 'always' | 'auto' | 'never' =
       body.persistMode === 'auto' || body.persistMode === 'never'
         ? body.persistMode
@@ -80,14 +84,23 @@ export async function POST(request: Request) {
       parsed = heuristicScenarioGrade(scenario, messages);
     }
 
+    const allGoalsMet = parsed.criteriaMet.length > 0 && parsed.criteriaMet.every(Boolean);
+    const maxTurns = Math.max(scenario.minTurns, scenario.maxTurns ?? 8);
+    const autoCompletionReason = userTurnCount >= maxTurns ? 'max-turns' : allGoalsMet && userTurnCount >= scenario.minTurns ? 'goals-met' : null;
+    const completionReason: 'manual' | 'goals-met' | 'max-turns' =
+      body.completionReason === 'goals-met' || body.completionReason === 'max-turns' ? body.completionReason : autoCompletionReason ?? 'manual';
     const shouldPersist =
       !!user.studentId &&
-      (persistMode === 'always' || (persistMode === 'auto' && userTurnCount >= scenario.minTurns && parsed.score >= 75));
+      (persistMode === 'always' || (persistMode === 'auto' && autoCompletionReason !== null));
 
     let persisted = false;
     // Persist (best effort)
     if (shouldPersist && user.studentId) {
       try {
+        const existing = findScenarioAttemptBySession(sessionId);
+        if (existing) {
+          persisted = true;
+        } else {
         const scenarioAttempt = recordScenarioAttempt({
           studentId: user.studentId,
           scenarioId: scenario.id,
@@ -95,6 +108,9 @@ export async function POST(request: Request) {
           criteriaMet: parsed.criteriaMet,
           score: parsed.score,
           feedback: parsed.feedback,
+          sessionId,
+          learnerTurns: userTurnCount,
+          completionReason,
         });
         recordScenarioKlpResults({
           scenarioAttemptId: scenarioAttempt.id,
@@ -103,7 +119,9 @@ export async function POST(request: Request) {
           score: parsed.score,
           criteriaMet: parsed.criteriaMet,
         });
+        after(() => drainXapiOutbox());
         persisted = true;
+        }
       } catch { /* ignore persistence errors */ }
     }
 
@@ -120,6 +138,10 @@ export async function POST(request: Request) {
       })),
       persisted,
       persistMode,
+      sessionId,
+      learnerTurns: userTurnCount,
+      maxTurns,
+      completionReason: persisted ? completionReason : null,
     });
   } catch (e) {
     console.error('scenario-score error:', e);

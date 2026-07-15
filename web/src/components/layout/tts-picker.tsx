@@ -58,6 +58,11 @@ export function TtsPicker() {
     )
   }
 
+  const usVoices = voices.filter((voice) => voice.accent === "American" || voice.lang?.toLowerCase().startsWith("en-us"))
+  const ukVoices = voices.filter((voice) => voice.accent === "British" || voice.lang?.toLowerCase().startsWith("en-gb"))
+  const groupedIds = new Set([...usVoices, ...ukVoices].map((voice) => voice.id))
+  const otherVoices = voices.filter((voice) => !groupedIds.has(voice.id))
+
   return (
     <div className="space-y-4">
       <div>
@@ -70,10 +75,11 @@ export function TtsPicker() {
           className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
         >
           <option value="">Default</option>
-          {voices.map(v => (
-            <option key={v.id} value={v.id}>{v.label}</option>
-          ))}
+          {usVoices.length > 0 && <optgroup label="US English">{usVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}</optgroup>}
+          {ukVoices.length > 0 && <optgroup label="UK English">{ukVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}</optgroup>}
+          {otherVoices.length > 0 && <optgroup label="Other English voices">{otherVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}</optgroup>}
         </select>
+        <p className="mt-1 text-xs text-muted-foreground">Accent describes the tutor voice you hear; Groq Whisper remains the speech-recognition engine.</p>
       </div>
 
       <div>

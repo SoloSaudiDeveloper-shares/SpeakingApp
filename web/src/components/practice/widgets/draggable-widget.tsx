@@ -1,64 +1,41 @@
 "use client"
 
 import { type ReactNode } from "react"
-import { useSortable } from "@dnd-kit/sortable"
-import { CSS } from "@dnd-kit/utilities"
-import { GripVertical, X } from "lucide-react"
+import { ChevronDown } from "lucide-react"
+import { cn } from "@/lib/utils/cn"
 
-interface DraggableWidgetProps {
+interface CollapsibleWidgetProps {
   id: string
   title: string
-  removable: boolean
-  onRemove?: () => void
+  collapsed: boolean
+  onToggle: () => void
   children: ReactNode
   className?: string
+  tone?: "action" | "progress"
 }
 
-export function DraggableWidget({ id, title, removable, onRemove, children, className = "" }: DraggableWidgetProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id })
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-    zIndex: isDragging ? 50 : undefined,
-  }
-
+export function CollapsibleWidget({ id, title, collapsed, onToggle, children, className = "", tone = "progress" }: CollapsibleWidgetProps) {
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`bg-card text-card-foreground border border-border rounded-xl shadow-sm overflow-hidden transition-shadow hover:shadow-md ${className}`}
-    >
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <div className="flex items-center gap-2">
-          <button
-            className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground transition-colors touch-none"
-            {...attributes}
-            {...listeners}
-          >
-            <GripVertical size={16} />
-          </button>
-          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-        </div>
-        {removable && onRemove && (
-          <button
-            onClick={onRemove}
-            className="text-muted-foreground hover:text-destructive transition-colors"
-            aria-label={`Remove ${title}`}
-          >
-            <X size={14} />
-          </button>
+    <section className={cn(
+      "overflow-hidden rounded-xl border shadow-sm",
+      tone === "action" ? "border-primary/35 bg-card shadow-primary/10" : "border-border/70 bg-card/60",
+      className,
+    )}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        aria-controls={`${id}-content`}
+        className={cn(
+          "flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition",
+          tone === "action" ? "bg-primary/5 hover:bg-primary/10" : "hover:bg-muted/40",
+          !collapsed && "border-b border-border/70",
         )}
-      </div>
-      <div className="p-4">{children}</div>
-    </div>
+      >
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        <ChevronDown size={16} className={cn("shrink-0 text-muted-foreground transition-transform", collapsed && "-rotate-90")} />
+      </button>
+      {!collapsed && <div id={`${id}-content`} className="p-4">{children}</div>}
+    </section>
   )
 }

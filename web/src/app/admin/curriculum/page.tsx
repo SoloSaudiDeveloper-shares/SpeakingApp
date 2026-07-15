@@ -87,6 +87,9 @@ interface GeneratedScenario {
   targetVocabulary: string[]
   successCriteria: string[]
   klpIds: number[]
+  progressionMode: "controlled" | "guided" | "open" | "simulation"
+  minTurns: number
+  maxTurns: number
 }
 
 interface CycleOption {
@@ -184,10 +187,12 @@ export default function AdminCurriculumPage() {
   const [supportStatus, setSupportStatus] = useState("")
   const [cefr, setCefr] = useState("A1")
   const [progressionMode, setProgressionMode] = useState("guided")
+  const [scenarioMaxTurns, setScenarioMaxTurns] = useState(8)
   const [cycles, setCycles] = useState<CycleOption[]>([])
   const [classes, setClasses] = useState<string[]>([])
   const [students, setStudents] = useState<StudentOption[]>([])
-  const [assignScenarioId, setAssignScenarioId] = useState("")
+  const [assignControlledScenarioId, setAssignControlledScenarioId] = useState("")
+  const [assignOpenScenarioId, setAssignOpenScenarioId] = useState("")
   const [assignTargetType, setAssignTargetType] = useState<"cycle" | "class" | "student">("cycle")
   const [assignCycleId, setAssignCycleId] = useState("")
   const [assignClassName, setAssignClassName] = useState("")
@@ -199,13 +204,15 @@ export default function AdminCurriculumPage() {
     () => (concepts?.rows ?? []).filter((concept) => selected.includes(concept.id)),
     [concepts, selected],
   )
-  const assignmentScenario = useMemo(
-    () => scenarios.find((scenario) => scenario.scenarioId === assignScenarioId) ?? null,
-    [scenarios, assignScenarioId],
+  const assignmentScenarios = useMemo(
+    () => [assignControlledScenarioId, assignOpenScenarioId]
+      .map((id) => scenarios.find((scenario) => scenario.scenarioId === id))
+      .filter((scenario): scenario is GeneratedScenario => Boolean(scenario)),
+    [scenarios, assignControlledScenarioId, assignOpenScenarioId],
   )
   const assignmentKlpIds = useMemo(
-    () => assignmentScenario?.klpIds ?? selected,
-    [assignmentScenario, selected],
+    () => Array.from(new Set(assignmentScenarios.length ? assignmentScenarios.flatMap((scenario) => scenario.klpIds) : selected)),
+    [assignmentScenarios, selected],
   )
 
   async function loadOverview() {
@@ -324,7 +331,7 @@ export default function AdminCurriculumPage() {
       const res = await fetch("/api/admin/klp/scenarios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ klpIds: selected, cefrLevel: cefr, progressionMode }),
+        body: JSON.stringify({ klpIds: selected, cefrLevel: cefr, progressionMode, maxTurns: scenarioMaxTurns }),
       })
       const json = await res.json()
       if (!res.ok) {
@@ -352,6 +359,29 @@ export default function AdminCurriculumPage() {
     }
   }
 
+  async function updateScenarioTurns(event: FormEvent<HTMLFormElement>, scenario: GeneratedScenario) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const maxTurns = Math.max(scenario.minTurns, Math.min(12, Number(form.get("maxTurns")) || scenario.maxTurns))
+    setBusy(true)
+    setMessage(null)
+    try {
+      const res = await fetch("/api/admin/klp/scenarios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update-turns", id: scenario.id, maxTurns }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? "Could not update scenario turns.")
+      setMessage(`Saved ${scenario.title}: ${scenario.minTurns}-${json.scenario.maxTurns} learner turns.`)
+      await loadScenarios()
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not update scenario turns.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function toggleTaskType(taskType: string) {
     setAssignTaskTypes((current) =>
       current.includes(taskType)
@@ -366,8 +396,8 @@ export default function AdminCurriculumPage() {
     setBusy(true)
     setMessage(null)
     try {
-      const title = assignmentScenario
-        ? `KLP scenario: ${assignmentScenario.title}`
+      const title = assignmentScenarios.length
+        ? `Lesson pathway: ${assignmentScenarios[0].title}`
         : `KLP speaking practice (${assignmentKlpIds.length} item${assignmentKlpIds.length === 1 ? "" : "s"})`
       const res = await fetch("/api/admin/klp/assignments", {
         method: "POST",
@@ -375,14 +405,20 @@ export default function AdminCurriculumPage() {
         body: JSON.stringify({
           cycleId: Number(assignCycleId),
           title,
-          description: assignmentScenario?.description ?? "Teacher-assigned KLP speaking practice.",
+          description: assignmentScenarios[0]?.description ?? "Teacher-assigned KLP speaking practice.",
           dueDate: assignDueDate,
           targetType: assignTargetType,
           className: assignTargetType === "class" ? assignClassName : undefined,
           studentIds: assignTargetType === "student" ? assignStudentIds : [],
           klpIds: assignmentKlpIds,
-          scenarioIds: assignmentScenario ? [assignmentScenario.scenarioId] : [],
+          scenarioIds: [assignControlledScenarioId, assignOpenScenarioId].filter(Boolean),
           taskTypes: assignTaskTypes.length ? assignTaskTypes : ["scenario"],
+          pathConfig: {
+            version: 1,
+            targetWordIds: [],
+            controlledScenarioId: assignControlledScenarioId,
+            openScenarioId: assignOpenScenarioId,
+          },
         }),
       })
       const json = await res.json().catch(() => null)
@@ -650,6 +686,10 @@ export default function AdminCurriculumPage() {
                   <option value="open">Open</option>
                   <option value="simulation">Exam/workplace</option>
                 </select>
+                <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+                  Maximum turns
+                  <input type="number" min={4} max={12} value={scenarioMaxTurns} onChange={(e) => setScenarioMaxTurns(Math.max(4, Math.min(12, Number(e.target.value) || 8)))} className="w-14 bg-transparent text-sm font-semibold text-foreground outline-none" />
+                </label>
                 <button disabled={busy || selected.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50">
                   {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
                   Generate draft
@@ -676,7 +716,7 @@ export default function AdminCurriculumPage() {
                 </p>
               </div>
               <button
-                disabled={busy || !assignCycleId || !assignDueDate || assignmentKlpIds.length === 0 || (assignTargetType === "student" && assignStudentIds.length === 0) || (assignTargetType === "class" && !assignClassName)}
+                disabled={busy || !assignCycleId || !assignDueDate || assignmentKlpIds.length === 0 || !assignControlledScenarioId || !assignOpenScenarioId || (assignTargetType === "student" && assignStudentIds.length === 0) || (assignTargetType === "class" && !assignClassName)}
                 className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
                 {busy ? <Loader2 size={15} className="animate-spin" /> : <Target size={15} />}
@@ -684,16 +724,26 @@ export default function AdminCurriculumPage() {
               </button>
             </div>
 
-            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            <div className="mt-4 grid gap-3 lg:grid-cols-4">
               <label className="space-y-1">
-                <span className="text-xs font-medium text-muted-foreground">Scenario</span>
+                <span className="text-xs font-medium text-muted-foreground">Controlled mini-dialogue</span>
                 <select
-                  value={assignScenarioId}
-                  onChange={(event) => setAssignScenarioId(event.target.value)}
+                  value={assignControlledScenarioId}
+                  onChange={(event) => setAssignControlledScenarioId(event.target.value)}
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none"
                 >
-                  <option value="">Selected KLPs only</option>
-                  {scenarios.filter((scenario) => scenario.status === "published").map((scenario) => (
+                  <option value="">Choose controlled scenario</option>
+                  {scenarios.filter((scenario) => scenario.status === "published" && scenario.progressionMode === "controlled").map((scenario) => (
+                    <option key={scenario.scenarioId} value={scenario.scenarioId}>{scenario.title}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-muted-foreground">Open scenario</span>
+                <select value={assignOpenScenarioId} onChange={(event) => setAssignOpenScenarioId(event.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none">
+                  <option value="">Choose open scenario</option>
+                  {scenarios.filter((scenario) => scenario.status === "published" && scenario.progressionMode === "open").map((scenario) => (
                     <option key={scenario.scenarioId} value={scenario.scenarioId}>{scenario.title}</option>
                   ))}
                 </select>
@@ -799,7 +849,7 @@ export default function AdminCurriculumPage() {
               </div>
               <p className="mt-3 text-xs text-muted-foreground">
                 Assignment will include {assignmentKlpIds.length} KLP link{assignmentKlpIds.length === 1 ? "" : "s"}
-                {assignmentScenario ? ` and scenario "${assignmentScenario.title}".` : "."}
+                {assignmentScenarios.length ? ` and ${assignmentScenarios.length} explicitly-role-labelled scenarios.` : ". Select both scenario roles to create the pathway."}
               </p>
             </div>
           </form>
@@ -830,13 +880,22 @@ export default function AdminCurriculumPage() {
                 <div className="mt-4 flex flex-wrap gap-2">
                   {scenario.targetVocabulary.slice(0, 6).map((word) => <span key={word} className="rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-semibold text-blue-300">{word}</span>)}
                 </div>
-                <button
-                  disabled={busy}
-                  onClick={() => publishScenario(scenario.id, scenario.status !== "published")}
-                  className="mt-4 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-50"
-                >
-                  {scenario.status === "published" ? "Move back to draft" : "Publish scenario"}
-                </button>
+                <div className="mt-4 flex flex-wrap items-end gap-3">
+                  <form onSubmit={(event) => updateScenarioTurns(event, scenario)} className="flex items-end gap-2">
+                    <label className="space-y-1">
+                      <span className="block text-xs font-medium text-muted-foreground">Maximum learner turns ({scenario.minTurns}-12)</span>
+                      <input name="maxTurns" type="number" min={scenario.minTurns} max={12} defaultValue={scenario.maxTurns} className="w-24 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground" />
+                    </label>
+                    <button disabled={busy} className="rounded-lg border border-border px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-50">Save turns</button>
+                  </form>
+                  <button
+                    disabled={busy}
+                    onClick={() => publishScenario(scenario.id, scenario.status !== "published")}
+                    className="rounded-lg border border-border px-4 py-2 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+                  >
+                    {scenario.status === "published" ? "Move back to draft" : "Publish scenario"}
+                  </button>
+                </div>
               </article>
             ))}
             {scenarios.length === 0 && (

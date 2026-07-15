@@ -47,6 +47,8 @@ export async function POST(request: Request) {
     const klpIds = cleanNumberArray(body.klpIds);
     const scenarioIds = cleanStringArray(body.scenarioIds);
     const taskTypes = cleanStringArray(body.taskTypes);
+    const controlledScenarioId = typeof body.pathConfig?.controlledScenarioId === 'string' ? body.pathConfig.controlledScenarioId.trim() : '';
+    const openScenarioId = typeof body.pathConfig?.openScenarioId === 'string' ? body.pathConfig.openScenarioId.trim() : '';
     const className = typeof body.className === 'string' && body.className.trim() ? body.className.trim() : undefined;
 
     if (!Number.isInteger(cycleId) || cycleId < 1 || !title || !dueDate) {
@@ -77,6 +79,13 @@ export async function POST(request: Request) {
       scenarioIds,
       source: 'klp',
       status: 'assigned',
+      pathConfig: controlledScenarioId && openScenarioId ? {
+        version: 1,
+        targetWordIds: cleanNumberArray(body.pathConfig?.targetWordIds),
+        controlledScenarioId,
+        openScenarioId,
+        textPracticeId: Number.isInteger(Number(body.pathConfig?.textPracticeId)) ? Number(body.pathConfig.textPracticeId) : null,
+      } : null,
     });
     return Response.json({ assignment }, { status: 201 });
   } catch (error) {

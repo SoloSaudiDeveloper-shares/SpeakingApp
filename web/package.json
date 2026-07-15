@@ -10,6 +10,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "backup:data": "node scripts/backup-data.mjs",
+    "backup:restore-test": "node scripts/backup-data.mjs --restore-test-only",
     "electron:dev": "concurrently -k \"npm:dev\" \"wait-on http://localhost:3000 && electron .\"",
     "dist": "node scripts/build-standalone.mjs"
   },

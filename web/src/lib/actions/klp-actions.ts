@@ -18,6 +18,7 @@ import {
   vocabularyItems,
 } from '@/lib/db/schema';
 import { callChat } from '@/lib/ai/providers';
+import { enqueueXapiForKlpResult, type XapiEvidenceKind } from '@/lib/integrations/xapi';
 import { getKlpAssignmentsForStudent } from '@/lib/actions/homework-actions';
 import { parseAlcKlpWorkbook, type KlpSupportStatus, type ParsedKlpWorkbook } from '@/lib/klp/xlsx';
 import type { Scenario } from '@/lib/ai/scenarios';
@@ -395,6 +396,7 @@ export async function generateKlpScenario(data: {
   klpIds: number[];
   cefrLevel: string;
   progressionMode?: Scenario['progressionMode'];
+  maxTurns?: number;
   createdByUserId?: number;
 }) {
   const concepts = getConceptsByIds(data.klpIds);
@@ -428,6 +430,7 @@ export async function generateKlpScenario(data: {
     successCriteriaJson: JSON.stringify(draft.successCriteria),
     targetVocabularyJson: JSON.stringify(draft.targetVocabulary),
     minTurns: draft.minTurns,
+    maxTurns: Math.max(draft.minTurns, Math.min(12, Number.isFinite(data.maxTurns) ? Math.round(data.maxTurns!) : 8)),
     progressionMode,
     status: 'draft',
     source: draft.aiAvailable ? 'ai_klp' : 'fallback_klp',
@@ -470,6 +473,17 @@ export function publishGeneratedScenario(id: number, publish: boolean) {
   return row;
 }
 
+export function updateGeneratedScenarioMaxTurns(id: number, requestedMaxTurns: number) {
+  const scenario = db.select().from(klpGeneratedScenarios).where(eq(klpGeneratedScenarios.id, id)).get();
+  if (!scenario) throw new Error('Scenario not found.');
+  const maxTurns = Math.max(scenario.minTurns, Math.min(12, Math.round(requestedMaxTurns)));
+  return db.update(klpGeneratedScenarios)
+    .set({ maxTurns, updatedAt: nowIso() })
+    .where(eq(klpGeneratedScenarios.id, id))
+    .returning()
+    .get();
+}
+
 export function generatedScenarioAsScenario(row: ReturnType<typeof listGeneratedScenarios>[number]): Scenario {
   return {
     id: row.scenarioId,
@@ -481,6 +495,7 @@ export function generatedScenarioAsScenario(row: ReturnType<typeof listGenerated
     firstMessage: row.firstMessage,
     successCriteria: row.successCriteria.length ? row.successCriteria : ['Responded with meaningful English'],
     minTurns: row.minTurns || 4,
+    maxTurns: row.maxTurns || 8,
     studentGoal: row.studentGoal,
     targetVocabulary: row.targetVocabulary,
     progressionMode: normalizeProgressionMode(row.progressionMode) || (/^practice\s+/i.test(row.title) ? 'controlled' : 'guided'),
@@ -512,6 +527,7 @@ export function recordAttemptKlpResults(data: {
     composite: number;
   };
   passScore?: number;
+  evidenceKind?: Extract<XapiEvidenceKind, 'answered' | 'reviewed'>;
 }) {
   const links = db
     .select({
@@ -528,6 +544,7 @@ export function recordAttemptKlpResults(data: {
   for (const link of links) {
     const assessed = link.supportStatus === 'speaking_scored' && link.assessmentMode !== 'context_only';
     const passed = assessed && data.scores.composite >= (data.passScore ?? 0.75);
+    const scorePercent = assessed ? Math.round(Math.max(0, Math.min(1, data.scores.composite)) * 100) : 0;
     const result = db.insert(attemptKlpResults).values({
       attemptId: data.attemptId,
       scenarioAttemptId: null,
@@ -536,13 +553,14 @@ export function recordAttemptKlpResults(data: {
       assessmentMode: assessed ? 'speaking_performance' : 'context_only',
       supportStatus: link.supportStatus,
       assessed,
-      successScorePercent: passed ? 100 : 0,
+      successScorePercent: scorePercent,
       passed,
       confidence: assessed ? 1 : 0,
       rawScoresJson: JSON.stringify(data.scores),
       createdAt,
     }).returning().get();
-    upsertStudentKlpSummary(data.studentId, link.klpConceptId, passed ? 100 : 0, passed, createdAt);
+    upsertStudentKlpSummary(data.studentId, link.klpConceptId, scorePercent, passed, createdAt);
+    enqueueXapiForKlpResult(result.id, data.evidenceKind ?? 'answered');
     out.push(result);
   }
   return out;
@@ -570,6 +588,7 @@ export function recordScenarioKlpResults(data: {
   for (const link of links) {
     const assessed = link.supportStatus === 'speaking_scored' && link.assessmentMode !== 'context_only';
     const passed = assessed && data.score >= 75;
+    const scorePercent = assessed ? Math.round(Math.max(0, Math.min(100, data.score))) : 0;
     const result = db.insert(attemptKlpResults).values({
       attemptId: null,
       scenarioAttemptId: data.scenarioAttemptId,
@@ -578,13 +597,14 @@ export function recordScenarioKlpResults(data: {
       assessmentMode: assessed ? 'speaking_performance' : 'context_only',
       supportStatus: link.supportStatus,
       assessed,
-      successScorePercent: passed ? 100 : 0,
+      successScorePercent: scorePercent,
       passed,
       confidence: assessed ? 0.85 : 0,
       rawScoresJson: JSON.stringify({ scenarioScore: data.score, criteriaMet: data.criteriaMet }),
       createdAt,
     }).returning().get();
-    upsertStudentKlpSummary(data.studentId, link.klpConceptId, passed ? 100 : 0, passed, createdAt);
+    upsertStudentKlpSummary(data.studentId, link.klpConceptId, scorePercent, passed, createdAt);
+    enqueueXapiForKlpResult(result.id, 'practiced');
     out.push(result);
   }
   return out;

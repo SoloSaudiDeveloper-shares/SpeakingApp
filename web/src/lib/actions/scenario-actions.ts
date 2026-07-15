@@ -9,7 +9,12 @@ export function recordScenarioAttempt(data: {
   criteriaMet: boolean[];
   score: number;
   feedback: string;
+  sessionId: string;
+  learnerTurns: number;
+  completionReason: 'manual' | 'goals-met' | 'max-turns';
 }) {
+  const existing = db.select().from(scenarioAttempts).where(eq(scenarioAttempts.sessionId, data.sessionId)).get();
+  if (existing) return existing;
   return db
     .insert(scenarioAttempts)
     .values({
@@ -19,10 +24,17 @@ export function recordScenarioAttempt(data: {
       criteriaMetJson: JSON.stringify(data.criteriaMet),
       score: data.score,
       feedback: data.feedback,
+      sessionId: data.sessionId,
+      learnerTurns: data.learnerTurns,
+      completionReason: data.completionReason,
       createdAt: new Date().toISOString(),
     })
     .returning()
     .get();
+}
+
+export function findScenarioAttemptBySession(sessionId: string) {
+  return db.select().from(scenarioAttempts).where(eq(scenarioAttempts.sessionId, sessionId)).get();
 }
 
 export function getScenarioHistory(studentId: number, limit = 50) {

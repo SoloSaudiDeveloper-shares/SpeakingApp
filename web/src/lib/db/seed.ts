@@ -754,7 +754,8 @@ function seedSanitizedDemoDatabase(): void {
     ]),
     targetVocabularyJson: JSON.stringify(['water', 'how much', 'please', 'thank you']),
     minTurns: 4,
-    progressionMode: 'guided',
+    maxTurns: 8,
+    progressionMode: 'controlled',
     status: 'published',
     source: 'sanitized_demo',
     createdByUserId: teacher?.id ?? null,
@@ -832,6 +833,13 @@ function seedSanitizedDemoDatabase(): void {
     scenarioIdsJson: JSON.stringify([scenarioId]),
     source: 'klp',
     status: 'assigned',
+    pathConfigJson: JSON.stringify({
+      version: 1,
+      targetWordIds: wordIds,
+      controlledScenarioId: scenarioId,
+      openScenarioId: 'smalltalk',
+      textPracticeId: null,
+    }),
     createdAt: now,
   }).returning().all();
   db.insert(homeworkSubmissions).values({

@@ -204,6 +204,7 @@ export default function STTSettingsPage() {
   const [noiseSuppression, setNoiseSuppression] = useState(true)
   const [confidenceThreshold, setConfidenceThreshold] = useState(50)
   const [pauseWarningSeconds, setPauseWarningSeconds] = useState(3)
+  const [scoredPauseThresholdMs, setScoredPauseThresholdMs] = useState(1000)
 
   useEffect(() => {
     const load = async () => {
@@ -226,6 +227,7 @@ export default function STTSettingsPage() {
           if (settings.stt_noise_suppression !== undefined) setNoiseSuppression(settings.stt_noise_suppression === "true")
           if (settings.stt_confidence_threshold) setConfidenceThreshold(Number(settings.stt_confidence_threshold))
           if (settings.stt_pause_warning_seconds) setPauseWarningSeconds(Number(settings.stt_pause_warning_seconds))
+          if (settings.stt_scored_pause_threshold_ms) setScoredPauseThresholdMs(Math.max(500, Math.min(3000, Number(settings.stt_scored_pause_threshold_ms))))
         }
       } catch { /* ignore */ }
       setLoading(false)
@@ -260,6 +262,7 @@ export default function STTSettingsPage() {
       saveSetting("stt_noise_suppression", String(noiseSuppression)),
       saveSetting("stt_confidence_threshold", String(confidenceThreshold)),
       saveSetting("stt_pause_warning_seconds", String(pauseWarningSeconds)),
+      saveSetting("stt_scored_pause_threshold_ms", String(scoredPauseThresholdMs)),
     ])
     setSaving(false)
     setSaved(true)
@@ -601,6 +604,14 @@ export default function STTSettingsPage() {
               <span>1s</span>
               <span>15s</span>
             </div>
+          </div>
+
+          {/* Scored pause threshold — deliberately separate from the visual warning. */}
+          <div className="max-w-md">
+            <label className="text-sm font-medium text-foreground">Scored pause threshold: {scoredPauseThresholdMs} ms</label>
+            <p className="mb-2 text-xs text-muted-foreground">Silence shorter than this is not counted as a scored hesitation. This does not change the visual pause warning above.</p>
+            <input type="range" min={500} max={3000} step={100} value={scoredPauseThresholdMs} onChange={(e) => setScoredPauseThresholdMs(Number(e.target.value))} className="w-full accent-primary" />
+            <div className="flex justify-between text-[10px] text-muted-foreground"><span>500 ms</span><span>3000 ms</span></div>
           </div>
 
           {/* Confidence Threshold */}

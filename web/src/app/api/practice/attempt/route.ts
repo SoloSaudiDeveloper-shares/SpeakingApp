@@ -22,6 +22,8 @@ import {
 } from '@/lib/db/schema';
 import { calculateScore, type CefrBand } from '@/lib/scoring/score-calculator';
 import { and, eq } from 'drizzle-orm';
+import { after } from 'next/server';
+import { drainXapiOutbox } from '@/lib/integrations/xapi';
 
 type PracticeStage = 'listen' | 'repeat' | 'read-aloud' | 'sentence' | 'free-speak' | 'review';
 
@@ -238,7 +240,9 @@ export async function POST(request: Request) {
         practiceTaskId,
         scores: free.scores,
         passScore: task.passScore,
+        evidenceKind: 'answered',
       });
+      after(() => drainXapiOutbox());
 
       return Response.json({ attempt: result, score: free.scores, feedback: free.feedback, freeSpeak: free.metadata, klpResults });
     }
@@ -298,7 +302,9 @@ export async function POST(request: Request) {
         composite: score.composite,
       },
       passScore: task.passScore,
+      evidenceKind: practiceStage === 'review' ? 'reviewed' : 'answered',
     });
+    after(() => drainXapiOutbox());
 
     return Response.json({ attempt: result, score, feedback, klpResults });
   } catch (error) {

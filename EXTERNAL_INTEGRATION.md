@@ -31,6 +31,12 @@ JWT requirements:
 - `jti` can only be used once
 - Optional claims: `email`, `studentNumber`, `className`, `classId`, `redirectTo`
 
+For SAIF launches, `sub` is the only account-linking key. The app first resolves an
+existing external identity, then a local student number/username equal to `sub`, and
+finally creates one code-keyed account if no match exists. It never links SAIF users
+by display name or email. Send the pseudonymous SAIF learner code in `sub`; do not put
+real names or email addresses in SAIF cohort xAPI statements.
+
 Example payload:
 
 ```json
@@ -78,3 +84,47 @@ Roster upsert body can be one user or `{ "users": [...] }`:
 ```
 
 Student summary returns local IDs, CEFR, diagnostic profile, active cycle, weak-word count, recent attempts, and progress stats. Raw audio is not exposed.
+
+## SAIF xAPI Outbox
+
+The Speaking Tutor keeps its own database. SAIF integration is limited to the signed
+launch handshake and xAPI statements sent to the SAIF LRS. Configure:
+
+```text
+XAPI_ENABLED=true
+XAPI_LRS_URL=https://YOUR_LRS/xapi/statements
+XAPI_USERNAME=<basic-auth-user>
+XAPI_PASSWORD=<basic-auth-password>
+XAPI_SOURCE_APP=speaking-lab
+XAPI_ACTOR_HOMEPAGE=https://saif.rsaf.mil
+```
+
+`XAPI_LRS_URL` is the LRS statements endpoint. Assessed, mapped KLP results are queued
+transactionally and delivered asynchronously in batches of at most 100 with xAPI
+version `1.0.3`. Learner requests do not wait for the LRS. Failed deliveries use
+exponential retry and remain visible to admins.
+
+The SAIF actor is deliberately pseudonymous and is identical for direct-login and
+SAIF-launched activity after account linking:
+
+```json
+{
+  "objectType": "Agent",
+  "account": {
+    "homePage": "https://saif.rsaf.mil",
+    "name": "<signed SAIF sub>"
+  }
+}
+```
+
+Admin-only operational endpoints:
+
+```text
+GET  /api/admin/integrations/xapi/status
+POST /api/admin/integrations/xapi/retry
+GET  /api/admin/integrations/xapi/actor-map
+```
+
+The initial implementation emits only Profile v1.2 core fields. Proposed rich speech
+signals are recorded in `integration/SPEAKING_SIGNAL_Q3_PROPOSAL.md` and remain local
+until SAIF publishes extension IRIs.

@@ -271,7 +271,11 @@ if (!skipDbInit) {
   CREATE TABLE IF NOT EXISTS dashboard_widgets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES user_accounts(id),
-    widget_config TEXT NOT NULL DEFAULT '[]'
+    widget_config TEXT NOT NULL DEFAULT '[]',
+    version INTEGER NOT NULL DEFAULT 1,
+    active_tab TEXT NOT NULL DEFAULT 'practice',
+    collapsed_sections_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT
   );
   CREATE TABLE IF NOT EXISTS student_xp (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -329,8 +333,20 @@ if (!skipDbInit) {
     scenario_ids_json TEXT NOT NULL DEFAULT '[]',
     source TEXT NOT NULL DEFAULT 'manual',
     status TEXT NOT NULL DEFAULT 'assigned',
+    path_config_json TEXT,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS homework_path_progress (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    homework_id INTEGER NOT NULL REFERENCES homework_assignments(id) ON DELETE CASCADE,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    stage_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'locked',
+    completed_items_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS homework_path_progress_assignment_student_stage_idx
+    ON homework_path_progress(homework_id, student_id, stage_key);
   CREATE TABLE IF NOT EXISTS homework_submissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     homework_id INTEGER NOT NULL REFERENCES homework_assignments(id),
@@ -388,6 +404,9 @@ if (!skipDbInit) {
     criteria_met_json TEXT NOT NULL DEFAULT '[]',
     score REAL NOT NULL DEFAULT 0,
     feedback TEXT,
+    session_id TEXT,
+    learner_turns INTEGER NOT NULL DEFAULT 0,
+    completion_reason TEXT,
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS practice_task_klps (
@@ -413,6 +432,7 @@ if (!skipDbInit) {
     success_criteria_json TEXT NOT NULL DEFAULT '[]',
     target_vocabulary_json TEXT NOT NULL DEFAULT '[]',
     min_turns INTEGER NOT NULL DEFAULT 4,
+    max_turns INTEGER NOT NULL DEFAULT 8,
     progression_mode TEXT NOT NULL DEFAULT 'guided',
     status TEXT NOT NULL DEFAULT 'draft',
     source TEXT NOT NULL DEFAULT 'ai_klp',
@@ -457,6 +477,26 @@ if (!skipDbInit) {
   );
   CREATE UNIQUE INDEX IF NOT EXISTS student_klp_summaries_student_concept_idx
     ON student_klp_summaries(student_id, klp_concept_id);
+  CREATE TABLE IF NOT EXISTS xapi_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    statement_id TEXT NOT NULL UNIQUE,
+    attempt_klp_result_id INTEGER NOT NULL REFERENCES attempt_klp_results(id) ON DELETE CASCADE,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    actor_subject TEXT NOT NULL,
+    verb TEXT NOT NULL,
+    statement_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    last_attempt_at TEXT,
+    sent_at TEXT,
+    last_error TEXT,
+    response_status INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS xapi_outbox_status_next_attempt_idx ON xapi_outbox(status, next_attempt_at);
+  CREATE INDEX IF NOT EXISTS xapi_outbox_result_idx ON xapi_outbox(attempt_klp_result_id);
   CREATE VIRTUAL TABLE IF NOT EXISTS vocabulary_fts USING fts5(
     word, arabic_meaning, content=vocabulary_items, content_rowid=id
   );
@@ -494,7 +534,31 @@ if (!skipDbInit) {
   ensureColumn('homework_assignments', 'scenario_ids_json', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn('homework_assignments', 'source', "TEXT NOT NULL DEFAULT 'manual'");
   ensureColumn('homework_assignments', 'status', "TEXT NOT NULL DEFAULT 'assigned'");
+  ensureColumn('homework_assignments', 'path_config_json', 'TEXT');
+  ensureColumn('dashboard_widgets', 'version', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn('dashboard_widgets', 'active_tab', "TEXT NOT NULL DEFAULT 'practice'");
+  ensureColumn('dashboard_widgets', 'collapsed_sections_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('dashboard_widgets', 'updated_at', 'TEXT');
+  ensureColumn('scenario_attempts', 'session_id', 'TEXT');
+  ensureColumn('scenario_attempts', 'learner_turns', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('scenario_attempts', 'completion_reason', 'TEXT');
+  ensureColumn('klp_generated_scenarios', 'max_turns', 'INTEGER NOT NULL DEFAULT 8');
   ensureColumn('klp_generated_scenarios', 'progression_mode', "TEXT NOT NULL DEFAULT 'guided'");
+  sqlite.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS scenario_attempts_session_idx ON scenario_attempts(session_id);
+    INSERT OR IGNORE INTO app_settings(key, value) VALUES ('stt_scored_pause_threshold_ms', '1000');
+    INSERT OR IGNORE INTO app_settings(key, value) VALUES ('tts_allow_student_choice', 'true');
+    UPDATE klp_generated_scenarios SET progression_mode = 'controlled', max_turns = 8 WHERE scenario_id = 'demo-klp-shop-water';
+    UPDATE homework_assignments
+    SET path_config_json = json_object(
+      'version', 1,
+      'targetWordIds', json(word_ids),
+      'controlledScenarioId', 'demo-klp-shop-water',
+      'openScenarioId', 'smalltalk',
+      'textPracticeId', NULL
+    )
+    WHERE title = 'Demo full speaking path for Ahmed' AND path_config_json IS NULL;
+  `);
 }
 
 export const db = drizzle(sqlite, { schema });
