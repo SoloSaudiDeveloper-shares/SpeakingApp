@@ -18,6 +18,7 @@ export interface Scenario {
   firstMessage: string;
   successCriteria: string[];
   minTurns: number;
+  maxTurns?: number;
   studentGoal?: string;
   targetVocabulary?: string[];
   progressionMode: ScenarioProgressionMode;

@@ -11,6 +11,14 @@ import { eq, and, desc } from 'drizzle-orm';
 export type HomeworkTargetType = 'class' | 'cycle' | 'student';
 export type HomeworkSource = 'manual' | 'klp';
 
+export interface HomeworkPathConfig {
+  version: 1;
+  targetWordIds: number[];
+  controlledScenarioId: string | null;
+  openScenarioId: string | null;
+  textPracticeId?: number | null;
+}
+
 export interface HomeworkAssignmentView {
   id: number;
   cycleId: number;
@@ -27,6 +35,7 @@ export interface HomeworkAssignmentView {
   scenarioIds: string[];
   source: HomeworkSource;
   status: string;
+  pathConfig: HomeworkPathConfig | null;
   createdAt: string;
   submitted?: boolean;
   submission?: typeof homeworkSubmissions.$inferSelect | null;
@@ -78,7 +87,20 @@ function mapHomework(row: typeof homeworkAssignments.$inferSelect): HomeworkAssi
     scenarioIds: cleanScenarioIds(parseJson(row.scenarioIdsJson, [])),
     source: row.source === 'klp' ? 'klp' : 'manual',
     status: row.status || 'assigned',
+    pathConfig: parsePathConfig(row.pathConfigJson),
     createdAt: row.createdAt,
+  };
+}
+
+function parsePathConfig(value: string | null | undefined): HomeworkPathConfig | null {
+  const parsed = parseJson<Record<string, unknown> | null>(value, null);
+  if (!parsed || Number(parsed.version) !== 1) return null;
+  return {
+    version: 1,
+    targetWordIds: cleanIds(parsed.targetWordIds),
+    controlledScenarioId: typeof parsed.controlledScenarioId === 'string' && parsed.controlledScenarioId.trim() ? parsed.controlledScenarioId.trim() : null,
+    openScenarioId: typeof parsed.openScenarioId === 'string' && parsed.openScenarioId.trim() ? parsed.openScenarioId.trim() : null,
+    textPracticeId: Number.isInteger(Number(parsed.textPracticeId)) ? Number(parsed.textPracticeId) : null,
   };
 }
 
@@ -97,6 +119,7 @@ export function createHomework(data: {
   scenarioIds?: string[];
   source?: HomeworkSource;
   status?: string;
+  pathConfig?: HomeworkPathConfig | null;
 }) {
   const targetType = data.targetType ?? (data.studentIds?.length ? 'student' : data.className ? 'class' : 'cycle');
   return db
@@ -116,6 +139,7 @@ export function createHomework(data: {
       scenarioIdsJson: JSON.stringify(cleanScenarioIds(data.scenarioIds ?? [])),
       source: data.source ?? 'manual',
       status: data.status ?? 'assigned',
+      pathConfigJson: data.pathConfig ? JSON.stringify(data.pathConfig) : null,
       createdAt: new Date().toISOString(),
     })
     .returning()

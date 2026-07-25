@@ -68,13 +68,19 @@ interface NavItem {
 
 /* ─── Navigation Definitions ─────────────────────────────────────────────────── */
 
-const studentLinks: NavItem[] = [
-  { label: "Dashboard",        href: "/practice/hub",           icon: LayoutDashboard },
-  { label: "Practice",         href: "/practice",                icon: Mic             },
+const studentLearnLinks: NavItem[] = [
+  { label: "Learner Home",     href: "/practice/hub",           icon: LayoutDashboard },
+  { label: "Lesson Practice",  href: "/practice",                icon: Mic             },
+]
+
+const studentSpeakingLinks: NavItem[] = [
   { label: "Weak Words",       href: "/practice/weak-words",     icon: Target          },
   { label: "Fluency Drills",   href: "/practice/fluency",        icon: Gauge           },
   { label: "AI Conversation",  href: "/practice/conversation",   icon: MessageCircle   },
   { label: "Text Practice",    href: "/practice/texts",          icon: FileText        },
+]
+
+const studentProgressLinks: NavItem[] = [
   { label: "History",          href: "/practice/history",        icon: History         },
 ]
 
@@ -100,7 +106,11 @@ const adminLinks: NavItem[] = [
 ]
 
 function getNavSections(role: UserRole): { title?: string; items: NavItem[] }[] {
-  if (role === "student") return [{ items: studentLinks }]
+  if (role === "student") return [
+    { title: "Learn", items: studentLearnLinks },
+    { title: "Speaking Practice", items: studentSpeakingLinks },
+    { title: "Progress", items: studentProgressLinks },
+  ]
   if (role === "teacher") {
     return [{ items: teacherLinks }]
   }
@@ -336,6 +346,7 @@ export function AppSidebar({
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/"
+    if (href === "/practice") return pathname === "/practice"
     if (href === "/teacher") return pathname === "/teacher"
     if (href === "/admin/models") return pathname === "/admin/models"
     if (href === "/reports") return pathname === "/reports"

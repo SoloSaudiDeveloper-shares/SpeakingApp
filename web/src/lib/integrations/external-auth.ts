@@ -171,7 +171,9 @@ function externalUsername(provider: string, subject: string): string {
 }
 
 function chooseUniqueNumber(input: ExternalUserInput): string {
-  const preferred = input.studentNumber?.trim() || externalUsername(input.provider, input.subject);
+  // The signed pseudonymous `sub` is the only SAIF learner key. Never use a
+  // display name, email, or unsigned alternate student-number claim for linking.
+  const preferred = input.subject.trim();
   const existing = db.select().from(students).where(eq(students.uniqueNumber, preferred)).get();
   if (!existing) return preferred;
   const fallback = externalUsername(input.provider, input.subject);
@@ -209,6 +211,11 @@ export function upsertExternalUser(input: ExternalUserInput) {
           .where(eq(students.id, studentId))
           .run();
       } else {
+        const stableStudent = db.select().from(students).where(eq(students.uniqueNumber, subject)).get();
+        if (stableStudent) {
+          studentId = stableStudent.id;
+          db.update(students).set({ class: input.className ?? stableStudent.class, isActive: true }).where(eq(students.id, studentId)).run();
+        } else {
         const [student] = db.insert(students)
           .values({
             uniqueNumber: chooseUniqueNumber(input),
@@ -220,6 +227,7 @@ export function upsertExternalUser(input: ExternalUserInput) {
           .returning()
           .all();
         studentId = student.id;
+        }
       }
     } else {
       studentId = null;
@@ -249,11 +257,17 @@ export function upsertExternalUser(input: ExternalUserInput) {
     };
   }
 
-  const username = externalUsername(provider, subject);
-  const existingUser = db.select().from(userAccounts).where(eq(userAccounts.username, username)).get();
+  const username = role === 'Student' ? subject : externalUsername(provider, subject);
+  const stableStudent = role === 'Student'
+    ? db.select().from(students).where(eq(students.uniqueNumber, subject)).get()
+    : null;
+  const existingUser = db.select().from(userAccounts).where(eq(userAccounts.username, username)).get()
+    ?? (stableStudent ? db.select().from(userAccounts).where(eq(userAccounts.studentId, stableStudent.id)).get() : undefined);
   if (existingUser) {
     let studentId = existingUser.studentId;
-    if (role === 'Student' && !studentId) {
+    if (role === 'Student' && !studentId && stableStudent) {
+      studentId = stableStudent.id;
+    } else if (role === 'Student' && !studentId) {
       const [student] = db.insert(students)
         .values({
           uniqueNumber: chooseUniqueNumber(input),
@@ -296,8 +310,8 @@ export function upsertExternalUser(input: ExternalUserInput) {
     };
   }
 
-  let studentId: number | null = null;
-  if (role === 'Student') {
+  let studentId: number | null = stableStudent?.id ?? null;
+  if (role === 'Student' && !studentId) {
     const [student] = db.insert(students)
       .values({
         uniqueNumber: chooseUniqueNumber(input),

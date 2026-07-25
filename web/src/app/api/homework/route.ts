@@ -66,6 +66,7 @@ export async function POST(request: Request) {
       scenarioIds,
       source,
       status,
+      pathConfig,
     } = body;
 
     if (!cycleId || !title || !dueDate) {
@@ -87,6 +88,7 @@ export async function POST(request: Request) {
       scenarioIds: scenarioIds ?? [],
       source,
       status,
+      pathConfig: pathConfig ?? null,
     });
 
     return Response.json({ homework }, { status: 201 });

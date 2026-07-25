@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { ArrowLeft, Timer, Mic, MicOff, Loader2, ArrowRight, TrendingUp, TrendingDown, Minus, Shuffle, RotateCcw, Trophy } from "lucide-react"
 import { getSpeechEngine, getDefaultEngine } from "@/lib/speech/speech-factory"
-import type { SpeechEngine, STTEngineId } from "@/lib/speech/types"
+import type { SpeechEngine, SpeechRecognitionResult, STTEngineId } from "@/lib/speech/types"
 import { startLivePreview, type LivePreviewHandle } from "@/lib/speech/live-preview"
 import { computeFluencyMetrics, scoreMonologueImprovement, monologueSufficiency, scoreContentQuality, type FluencyMetrics } from "@/lib/scoring"
 import { AudioVisualizer } from "@/components/shared/audio-visualizer"
@@ -24,6 +24,7 @@ interface RoundResult {
   tooShort: boolean
   /** True when the speech was repetitive / incoherent / off-topic (not real content). */
   lowContent: boolean
+  wordTimings?: Array<{ word: string; start: number; end: number }>
 }
 
 type Phase = "topic" | "ready" | "recording" | "round-summary" | "final"
@@ -43,15 +44,19 @@ export default function MonologuePage() {
   const [submitting, setSubmitting] = useState(false)
   const [cycleId, setCycleId] = useState<number | null>(null)
   const [saved, setSaved] = useState(false)
+  const [retryRecording, setRetryRecording] = useState<{ blob: Blob; url: string; canRetranscribe: boolean } | null>(null)
 
   const engineRef = useRef<SpeechEngine | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const interimUnsubRef = useRef<(() => void) | null>(null)
   const livePreviewRef = useRef<LivePreviewHandle | null>(null)
   const liveEnabledRef = useRef(true) // admin setting stt_live_preview (default on)
+  const scoredPauseThresholdRef = useRef(1000)
   const pauseEventsRef = useRef<{ at: number; durationMs: number }[]>([])
   const lastInterimRef = useRef(0)
   const startRef = useRef(0)
+  const stoppingRef = useRef(false)
+  const timerExpiredRef = useRef(false)
 
   useEffect(() => {
     const saved = localStorage.getItem("stt-engine") as STTEngineId | null
@@ -62,6 +67,7 @@ export default function MonologuePage() {
     }).catch(() => {})
     fetch("/api/settings").then(r => r.json()).then(s => {
       liveEnabledRef.current = s?.stt_live_preview !== "false" // default ON
+      scoredPauseThresholdRef.current = Math.max(500, Math.min(3000, Number(s?.stt_scored_pause_threshold_ms) || 1000))
     }).catch(() => {})
     return () => {
       if (timerRef.current) clearInterval(timerRef.current)
@@ -79,6 +85,9 @@ export default function MonologuePage() {
 
   const startRound = useCallback(async () => {
     setMicError(null); setLiveTranscript("")
+    stoppingRef.current = false
+    timerExpiredRef.current = false
+    if (retryRecording) { URL.revokeObjectURL(retryRecording.url); setRetryRecording(null) }
     try {
       if (!engineRef.current) engineRef.current = getDefaultEngine()
       await engineRef.current.start()
@@ -112,7 +121,7 @@ export default function MonologuePage() {
       setTimeLeft(limit)
       timerRef.current = setInterval(() => {
         setTimeLeft((t) => {
-          if (t <= 1) { stopRound() ; return 0 }
+          if (t <= 1) { timerExpiredRef.current = true; void stopRound(); return 0 }
           return t - 1
         })
       }, 1000)
@@ -133,17 +142,24 @@ export default function MonologuePage() {
       setRecording(false); setPhase("ready")
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roundIndex])
+  }, [roundIndex, retryRecording])
 
-  const stopRound = useCallback(async () => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
-    if (interimUnsubRef.current) { interimUnsubRef.current(); interimUnsubRef.current = null }
-    livePreviewRef.current?.stop(); livePreviewRef.current = null
-    setRecording(false); setSubmitting(true)
+  const stopRound = useCallback(async (retryBlob?: Blob) => {
+    if (stoppingRef.current) return
+    stoppingRef.current = true
+    if (!retryBlob) {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+      if (interimUnsubRef.current) { interimUnsubRef.current(); interimUnsubRef.current = null }
+      livePreviewRef.current?.stop(); livePreviewRef.current = null
+      setRecording(false)
+    }
+    setSubmitting(true)
     try {
       if (!engineRef.current) return
       const sttStartedAt = Date.now()
-      const result = await engineRef.current.stop()
+      const result = retryBlob && engineRef.current.transcribeBlob
+        ? await engineRef.current.transcribeBlob(retryBlob)
+        : await engineRef.current.stop()
       setMicStream(null)
       const transcript = result.transcript ?? ""
       recordClientSpeechReliabilityEvent({
@@ -157,11 +173,24 @@ export default function MonologuePage() {
         errorCode: transcript.trim() ? null : (result.errorCode ?? "no-speech"),
         metadata: { engine: engineRef.current?.name ?? "Monologue engine" },
       })
-      const actualSeconds = (Date.now() - startRef.current) / 1000
+      const actualSeconds = result.audioDurationSeconds ?? (Date.now() - startRef.current) / 1000
+      const incompleteCapture = !retryBlob && timerExpiredRef.current && actualSeconds < ROUND_LIMITS[roundIndex] - 3
+      if (result.partial || incompleteCapture) {
+        if (retryRecording) URL.revokeObjectURL(retryRecording.url)
+        if (result.audioBlob) setRetryRecording({ blob: result.audioBlob, url: URL.createObjectURL(result.audioBlob), canRetranscribe: Boolean(result.partial) })
+        setMicError(result.partial
+          ? result.errorMessage ?? "One transcription chunk failed. Your recording is preserved; retry transcription before scoring."
+          : `The captured audio decoded to ${actualSeconds.toFixed(1)} seconds instead of the full ${ROUND_LIMITS[roundIndex]} seconds. Your recording is preserved; record this round again.`)
+        setPhase("ready")
+        return
+      }
+      if (retryRecording) { URL.revokeObjectURL(retryRecording.url); setRetryRecording(null) }
       const rawMetrics = computeFluencyMetrics({
         transcript,
         audioDurationSeconds: actualSeconds,
         pauseEvents: pauseEventsRef.current,
+        wordTimings: result.wordTimings,
+        scoredPauseThresholdMs: scoredPauseThresholdRef.current,
         cefrBand: cefr,
       })
 
@@ -198,6 +227,7 @@ export default function MonologuePage() {
         metrics,
         tooShort: sufficiency < 0.5,
         lowContent: sufficiency >= 0.5 && content < 0.5,
+        wordTimings: result.wordTimings,
       }
       setResults((prev) => [...prev, rr])
       setPhase("round-summary")
@@ -214,10 +244,11 @@ export default function MonologuePage() {
       setMicError("Something went wrong while scoring. Try the round again.")
       setPhase("ready")
     } finally {
+      stoppingRef.current = false
       setSubmitting(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roundIndex, cefr, topic])
+  }, [roundIndex, cefr, topic, retryRecording])
 
   const nextRound = () => {
     if (roundIndex < ROUND_LIMITS.length - 1) {
@@ -245,7 +276,9 @@ export default function MonologuePage() {
             round: r.round, limitSeconds: r.limitSeconds, actualSeconds: r.actualSeconds,
             transcript: r.transcript, wordCount: r.metrics.wordCount,
             speechRateWpm: r.metrics.speechRateWpm, articulationRateWpm: r.metrics.articulationRateWpm,
-            fluencyIndex: r.metrics.fluencyIndex,
+            fluencyIndex: r.metrics.fluencyIndex, pauseCount: r.metrics.pauseCount,
+            totalPauseSeconds: r.metrics.totalPauseSeconds, scoredPauseThresholdMs: r.metrics.scoredPauseThresholdMs,
+            wordTimings: r.wordTimings,
           })),
         }),
       }).then(() => setSaved(true)).catch(() => {})
@@ -253,6 +286,8 @@ export default function MonologuePage() {
   }, [phase, saved, results, topic, cycleId])
 
   const restart = () => {
+    if (retryRecording) URL.revokeObjectURL(retryRecording.url)
+    setRetryRecording(null)
     setPhase("topic"); setTopic(null); setRoundIndex(0); setResults([]); setSaved(false); setLiveTranscript("")
   }
 
@@ -265,7 +300,7 @@ export default function MonologuePage() {
       <div className="mb-5 flex items-center gap-3">
         <Link href="/practice/fluency" className="text-muted-foreground hover:text-foreground"><ArrowLeft size={20} /></Link>
         <Timer className="text-primary" size={22} />
-        <h1 className="text-xl font-bold text-foreground">4/3/2 Timed Monologue</h1>
+        <h1 className="text-xl font-bold text-foreground">4/3/2 fluency drill — adapted to 90/60/40 seconds</h1>
       </div>
 
       {micError && (
@@ -276,8 +311,7 @@ export default function MonologuePage() {
       {phase === "topic" && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Pick a topic. You&apos;ll speak about it <strong>three times</strong> — 90s, then 60s, then 40s.
-            Saying the same thing in less time trains you to speak faster and more smoothly.
+            The original 4/3/2 method repeats the same talk in four, three, then two minutes. This shorter version uses <strong>90, 60, and 40 seconds</strong> so you can repeat the same idea with increasing automaticity. Keep the content similar and make it smoother, not merely faster.
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
             {topicList.map((t) => (
@@ -306,6 +340,14 @@ export default function MonologuePage() {
               <p className="mt-3 text-xs text-emerald-400">Same topic — now say it in less time. Speak a little faster!</p>
             )}
           </div>
+          {retryRecording && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-left">
+              <p className="text-sm font-semibold text-foreground">Your recording is safe</p>
+              <audio src={retryRecording.url} controls className="mt-2 h-9 w-full" />
+              <p className="mt-2 text-xs text-muted-foreground">Listen to the preserved capture before retrying.</p>
+              {retryRecording.canRetranscribe && <button onClick={() => void stopRound(retryRecording.blob)} disabled={submitting} className="mt-3 inline-flex items-center gap-2 rounded-md bg-amber-500 px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">{submitting ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />} Retry transcription</button>}
+            </div>
+          )}
           <button onClick={startRound}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-semibold text-primary-foreground hover:opacity-90 shadow-lg shadow-primary/25">
             <Mic size={18} /> Start Round {roundIndex + 1}
@@ -336,7 +378,7 @@ export default function MonologuePage() {
               </div>
             )}
           </div>
-          <button onClick={stopRound} disabled={submitting}
+          <button onClick={() => void stopRound()} disabled={submitting}
             className="inline-flex items-center gap-2 rounded-lg bg-red-500 px-6 py-3 font-semibold text-white shadow-lg shadow-red-500/25 disabled:opacity-50">
             {submitting ? <Loader2 size={18} className="animate-spin" /> : <MicOff size={18} />} Stop early
           </button>
@@ -350,6 +392,12 @@ export default function MonologuePage() {
           <div className="rounded-xl border border-border bg-card p-6">
             <p className="text-xs uppercase tracking-wider text-muted-foreground">Round {roundIndex + 1} complete</p>
             <RoundStats r={results[roundIndex]} prev={roundIndex > 0 ? results[roundIndex - 1] : undefined} />
+            <div className="mt-4 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-3 text-left">
+              <p className="text-xs font-semibold uppercase tracking-wider text-emerald-300">What went well</p>
+              <p className="mt-1 text-sm text-foreground">{roundStrength(results[roundIndex], roundIndex > 0 ? results[roundIndex - 1] : undefined)}</p>
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wider text-primary">One next step</p>
+              <p className="mt-1 text-sm text-muted-foreground">{roundTip(results[roundIndex])}</p>
+            </div>
             {results[roundIndex].tooShort && (
               <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-left text-xs text-amber-500">
                 That was very short to measure fluency. Speak about the topic continuously for the full time to get an accurate score.
@@ -452,6 +500,23 @@ function RoundStats({ r, prev }: { r: RoundResult; prev?: RoundResult }) {
       <Stat label="Fluency" value={`${Math.round(r.metrics.fluencyIndex * 100)}`} unit="%" cur={r.metrics.fluencyIndex} prev={prev?.metrics.fluencyIndex} />
     </div>
   )
+}
+
+function roundStrength(round: RoundResult, previous?: RoundResult) {
+  if (previous && round.metrics.speechRateWpm > previous.metrics.speechRateWpm) {
+    return `You kept the same topic while increasing your pace from ${previous.metrics.speechRateWpm} to ${round.metrics.speechRateWpm} words per minute.`
+  }
+  if (round.metrics.meanLengthOfRun >= 4) {
+    return `You produced ${round.metrics.wordCount} words and averaged ${round.metrics.meanLengthOfRun} words between scored pauses.`
+  }
+  return `You completed the round with ${round.metrics.wordCount} captured words at ${round.metrics.speechRateWpm} words per minute.`
+}
+
+function roundTip(round: RoundResult) {
+  if (round.tooShort) return "Use the whole round and keep adding one supporting detail until the timer ends."
+  if (round.lowContent) return "Keep the same message, but replace repeated words with one concrete example or reason."
+  if (round.metrics.pauseCount > 0) return `Plan the next short phrase before you start; ${round.metrics.pauseCount} pauses exceeded the ${round.metrics.scoredPauseThresholdMs ?? 1000} ms scoring threshold.`
+  return "In the next round, link two ideas with because, but, or so while keeping this steady pace."
 }
 
 function Stat({ label, value, unit, cur, prev }: { label: string; value: string; unit: string; cur?: number; prev?: number }) {

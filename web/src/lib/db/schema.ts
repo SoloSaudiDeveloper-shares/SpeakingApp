@@ -286,6 +286,10 @@ export const dashboardWidgets = sqliteTable('dashboard_widgets', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   userId: integer('user_id').notNull().references(() => userAccounts.id),
   widgetConfig: text('widget_config').notNull().default('[]'),
+  version: integer('version').notNull().default(1),
+  activeTab: text('active_tab').notNull().default('practice'),
+  collapsedSectionsJson: text('collapsed_sections_json').notNull().default('[]'),
+  updatedAt: text('updated_at'),
 });
 
 // Gamification
@@ -352,8 +356,22 @@ export const homeworkAssignments = sqliteTable('homework_assignments', {
   scenarioIdsJson: text('scenario_ids_json').notNull().default('[]'),
   source: text('source').notNull().default('manual'), // manual | klp
   status: text('status').notNull().default('assigned'), // assigned | archived
+  pathConfigJson: text('path_config_json'),
   createdAt: text('created_at').notNull(),
 });
+
+export const homeworkPathProgress = sqliteTable('homework_path_progress', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  homeworkId: integer('homework_id').notNull().references(() => homeworkAssignments.id, { onDelete: 'cascade' }),
+  studentId: integer('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+  stageKey: text('stage_key').notNull(),
+  status: text('status').notNull().default('locked'),
+  completedItemsJson: text('completed_items_json').notNull().default('[]'),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  assignmentStudentStageIdx: uniqueIndex('homework_path_progress_assignment_student_stage_idx')
+    .on(table.homeworkId, table.studentId, table.stageKey),
+}));
 
 export const homeworkSubmissions = sqliteTable('homework_submissions', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -422,8 +440,13 @@ export const scenarioAttempts = sqliteTable('scenario_attempts', {
   criteriaMetJson: text('criteria_met_json').notNull().default('[]'),
   score: real('score').notNull().default(0),
   feedback: text('feedback'),
+  sessionId: text('session_id'),
+  learnerTurns: integer('learner_turns').notNull().default(0),
+  completionReason: text('completion_reason'),
   createdAt: text('created_at').notNull(),
-});
+}, (table) => ({
+  sessionIdx: uniqueIndex('scenario_attempts_session_idx').on(table.sessionId),
+}));
 
 export const practiceTaskKlps = sqliteTable('practice_task_klps', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -449,6 +472,7 @@ export const klpGeneratedScenarios = sqliteTable('klp_generated_scenarios', {
   successCriteriaJson: text('success_criteria_json').notNull().default('[]'),
   targetVocabularyJson: text('target_vocabulary_json').notNull().default('[]'),
   minTurns: integer('min_turns').notNull().default(4),
+  maxTurns: integer('max_turns').notNull().default(8),
   progressionMode: text('progression_mode').notNull().default('guided'),
   status: text('status').notNull().default('draft'),
   source: text('source').notNull().default('ai_klp'),
@@ -495,4 +519,26 @@ export const studentKlpSummaries = sqliteTable('student_klp_summaries', {
   lastPracticedAt: text('last_practiced_at'),
 }, (table) => ({
   studentConceptIdx: uniqueIndex('student_klp_summaries_student_concept_idx').on(table.studentId, table.klpConceptId),
+}));
+
+export const xapiOutbox = sqliteTable('xapi_outbox', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  statementId: text('statement_id').notNull().unique(),
+  attemptKlpResultId: integer('attempt_klp_result_id').notNull().references(() => attemptKlpResults.id, { onDelete: 'cascade' }),
+  studentId: integer('student_id').notNull().references(() => students.id, { onDelete: 'cascade' }),
+  actorSubject: text('actor_subject').notNull(),
+  verb: text('verb').notNull(),
+  statementJson: text('statement_json').notNull(),
+  status: text('status').notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  nextAttemptAt: text('next_attempt_at').notNull(),
+  lastAttemptAt: text('last_attempt_at'),
+  sentAt: text('sent_at'),
+  lastError: text('last_error'),
+  responseStatus: integer('response_status'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  statusNextAttemptIdx: index('xapi_outbox_status_next_attempt_idx').on(table.status, table.nextAttemptAt),
+  resultIdx: index('xapi_outbox_result_idx').on(table.attemptKlpResultId),
 }));

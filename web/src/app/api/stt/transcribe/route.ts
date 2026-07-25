@@ -54,10 +54,13 @@ export async function POST(req: Request) {
   }
 
   const groqForm = new FormData();
-  groqForm.append('file', file, 'audio.webm');
+  const suppliedName = typeof (file as File).name === 'string' ? (file as File).name : 'audio.webm';
+  groqForm.append('file', file, suppliedName || 'audio.webm');
   groqForm.append('model', model);
   groqForm.append('language', 'en');
-  groqForm.append('response_format', 'json');
+  groqForm.append('response_format', 'verbose_json');
+  groqForm.append('timestamp_granularities[]', 'word');
+  groqForm.append('timestamp_granularities[]', 'segment');
   groqForm.append('temperature', '0');
 
   try {
@@ -77,7 +80,16 @@ export async function POST(req: Request) {
     const data = await res.json();
     const transcript = String(data.text ?? '').trim();
     record({ success: !!transcript, statusCode: 200, errorCode: transcript ? undefined : 'no-speech', noSpeech: !transcript });
-    return Response.json({ transcript });
+    const words = Array.isArray(data.words) ? data.words.flatMap((word: unknown) => {
+      if (!word || typeof word !== 'object') return [];
+      const item = word as Record<string, unknown>;
+      const text = String(item.word ?? '').trim();
+      const start = Number(item.start);
+      const end = Number(item.end);
+      return text && Number.isFinite(start) && Number.isFinite(end) ? [{ word: text, start, end }] : [];
+    }) : [];
+    const segments = Array.isArray(data.segments) ? data.segments : [];
+    return Response.json({ transcript, words, segments, duration: Number(data.duration) || null });
   } catch (e) {
     record({ success: false, statusCode: 502, errorCode: 'network', fallbackUsed: true });
     return Response.json({ error: 'network', message: e instanceof Error ? e.message : String(e) }, { status: 502 });

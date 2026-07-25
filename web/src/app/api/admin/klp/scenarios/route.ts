@@ -1,4 +1,4 @@
-import { generateKlpScenario, listGeneratedScenarios, publishGeneratedScenario } from '@/lib/actions/klp-actions';
+import { generateKlpScenario, listGeneratedScenarios, publishGeneratedScenario, updateGeneratedScenarioMaxTurns } from '@/lib/actions/klp-actions';
 import { requireKlpUser } from '../_auth';
 
 export async function GET() {
@@ -22,6 +22,12 @@ export async function POST(request: Request) {
       if (!Number.isInteger(id) || id < 1) return Response.json({ error: 'Invalid scenario id.' }, { status: 400 });
       return Response.json({ scenario: publishGeneratedScenario(id, body.publish !== false) });
     }
+    if (body.action === 'update-turns') {
+      const id = Number(body.id);
+      const maxTurns = Number(body.maxTurns);
+      if (!Number.isInteger(id) || id < 1 || !Number.isFinite(maxTurns)) return Response.json({ error: 'Invalid scenario turn settings.' }, { status: 400 });
+      return Response.json({ scenario: updateGeneratedScenarioMaxTurns(id, maxTurns) });
+    }
     const klpIds = Array.isArray(body.klpIds)
       ? body.klpIds.map((id: unknown) => Number(id)).filter((id: number) => Number.isInteger(id) && id > 0)
       : [];
@@ -30,6 +36,7 @@ export async function POST(request: Request) {
       klpIds,
       cefrLevel: typeof body.cefrLevel === 'string' ? body.cefrLevel : 'A1',
       progressionMode: typeof body.progressionMode === 'string' ? body.progressionMode : 'guided',
+      maxTurns: Number(body.maxTurns),
       createdByUserId: auth.id,
     });
     return Response.json({ scenario });
