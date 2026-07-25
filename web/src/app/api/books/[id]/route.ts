@@ -18,7 +18,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const auth = await requireAdmin();
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
   const { id } = await params;
-  const data = getBookWithVocabulary(Number(id));
+  const data = await getBookWithVocabulary(Number(id));
   if (!data) return Response.json({ error: 'Not found.' }, { status: 404 });
   return Response.json(data);
 }
@@ -29,7 +29,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (auth.user.role !== 'Admin') return Response.json({ error: 'Admin only.' }, { status: 403 });
   const { id } = await params;
   const body = await req.json();
-  updateBook(Number(id), body);
+  await updateBook(Number(id), body);
   return Response.json({ ok: true });
 }
 
@@ -39,7 +39,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (auth.user.role !== 'Admin') return Response.json({ error: 'Admin only.' }, { status: 403 });
   const { id } = await params;
   try {
-    deleteBook(Number(id));
+    await deleteBook(Number(id));
     return Response.json({ ok: true });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : 'Delete failed' }, { status: 400 });

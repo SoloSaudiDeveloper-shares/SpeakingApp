@@ -1,56 +1,30 @@
-import { NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
-import path from 'path';
-import fs from 'fs';
 import { getSessionFromToken } from '@/lib/actions/auth-actions';
-
-function audioArchiveDir() {
-  return process.env.SPEAKING_LAB_AUDIO_DIR
-    ? path.resolve(process.env.SPEAKING_LAB_AUDIO_DIR)
-    : path.resolve(path.join(process.cwd(), '..', 'audio-archive'));
-}
+import { downloadAudioObject } from '@/lib/storage/audio-storage';
 
 export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ path: string[] }> }
+  _request: Request,
+  { params }: { params: Promise<{ path: string[] }> },
 ) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('session-token')?.value;
-    if (!token) return new Response('Not authenticated', { status: 401 });
-    const user = await getSessionFromToken(token);
-    if (!user) return new Response('Not authenticated', { status: 401 });
-
-    const { path: segments } = await params;
-    const base = audioArchiveDir();
-    const filePath = path.join(base, ...segments);
-
-    // Security: prevent directory traversal
-    const resolved = path.resolve(filePath);
-    if (!resolved.startsWith(base + path.sep) && resolved !== base) {
-      return new Response('Forbidden', { status: 403 });
+    const token = (await cookies()).get('session-token')?.value;
+    if (!token || !await getSessionFromToken(token)) {
+      return new Response('Not authenticated', { status: 401 });
     }
-
-    if (!fs.existsSync(resolved)) {
-      return new Response('Not found', { status: 404 });
-    }
-
-    const buffer = fs.readFileSync(resolved);
-    const ext = path.extname(resolved).toLowerCase();
-    const mimeTypes: Record<string, string> = {
-      '.wav': 'audio/wav',
-      '.mp3': 'audio/mpeg',
-      '.ogg': 'audio/ogg',
-      '.webm': 'audio/webm',
-    };
-
-    return new Response(buffer, {
+    const { path } = await params;
+    const object = await downloadAudioObject(path.join('/'));
+    return new Response(object.data, {
       headers: {
-        'Content-Type': mimeTypes[ext] || 'application/octet-stream',
-        'Content-Length': buffer.length.toString(),
+        'Content-Type': object.contentType,
+        'Content-Length': String(object.data.length),
+        'Cache-Control': 'private, max-age=300',
       },
     });
-  } catch {
-    return new Response('Internal server error', { status: 500 });
+  } catch (error) {
+    if ((error as { statusCode?: number }).statusCode === 404) {
+      return new Response('Not found', { status: 404 });
+    }
+    console.error('[audio] Download failed:', error instanceof Error ? error.message : 'unknown error');
+    return new Response('Audio unavailable', { status: 503 });
   }
 }

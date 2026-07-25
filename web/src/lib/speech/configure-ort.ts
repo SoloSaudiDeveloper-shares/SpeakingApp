@@ -3,8 +3,8 @@
 /**
  * Configure transformers.js's onnxruntime-web to run OFFLINE and reliably:
  *   - wasmPaths = "/ort/"  → load the BUNDLED ORT wasm, not a CDN.
- *   - numThreads = 1       → no SharedArrayBuffer needed (Electron/dev aren't
- *                            cross-origin isolated).
+ *   - numThreads = 1       → no SharedArrayBuffer or cross-origin isolation
+ *                            requirement.
  *   - proxy = false        → CRITICAL. With the proxy worker on, ORT pulls its
  *                            runtime from a CDN regardless of wasmPaths and dies
  *                            with "no available backend found" offline.

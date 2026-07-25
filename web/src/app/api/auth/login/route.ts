@@ -20,6 +20,13 @@ export async function POST(request: Request) {
       secure: process.env.SESSION_COOKIE_SECURE === 'true',
       path: '/',
     });
+    cookieStore.set('must-change-password', result.user.mustChangePassword ? '1' : '', {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.SESSION_COOKIE_SECURE === 'true',
+      path: '/',
+      maxAge: result.user.mustChangePassword ? 7 * 24 * 60 * 60 : 0,
+    });
 
     return Response.json({ user: result.user });
   } catch {

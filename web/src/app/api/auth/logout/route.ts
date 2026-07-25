@@ -26,6 +26,13 @@ function clearAuthCookies(response: NextResponse) {
     path: '/',
     maxAge: 0,
   });
+  response.cookies.set('must-change-password', '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.SESSION_COOKIE_SECURE === 'true',
+    path: '/',
+    maxAge: 0,
+  });
 }
 
 export async function POST(req: NextRequest) {

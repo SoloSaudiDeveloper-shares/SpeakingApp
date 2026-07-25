@@ -12,7 +12,7 @@ const ALLOWED_SECTIONS = new Set([
 
 async function currentUser() {
   const token = (await cookies()).get('session-token')?.value;
-  return token ? getSessionFromToken(token) : null;
+  return token ? await getSessionFromToken(token) : null;
 }
 
 function parseCollapsed(value: string | null | undefined) {
@@ -27,7 +27,7 @@ function parseCollapsed(value: string | null | undefined) {
 export async function GET() {
   const user = await currentUser();
   if (!user) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
-  const row = db.select().from(dashboardWidgets).where(eq(dashboardWidgets.userId, user.id)).get();
+  const row = ((await db.select().from(dashboardWidgets).where(eq(dashboardWidgets.userId, user.id)).limit(1))[0]);
   if (!row) return Response.json(DEFAULTS);
   return Response.json({
     version: row.version || 1,
@@ -40,7 +40,7 @@ export async function PUT(request: Request) {
   const user = await currentUser();
   if (!user) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
   const body = await request.json().catch(() => ({}));
-  const existing = db.select().from(dashboardWidgets).where(eq(dashboardWidgets.userId, user.id)).get();
+  const existing = ((await db.select().from(dashboardWidgets).where(eq(dashboardWidgets.userId, user.id)).limit(1))[0]);
   const activeTab = body.activeTab === 'progress' ? 'progress' : 'practice';
   const collapsedSections = Array.isArray(body.collapsedSections)
     ? body.collapsedSections.map(String).filter((id: string) => ALLOWED_SECTIONS.has(id))
@@ -53,7 +53,7 @@ export async function PUT(request: Request) {
     updatedAt: now,
     widgetConfig: '[]',
   };
-  if (existing) db.update(dashboardWidgets).set(values).where(eq(dashboardWidgets.id, existing.id)).run();
-  else db.insert(dashboardWidgets).values({ userId: user.id, ...values }).run();
+  if (existing) (await db.update(dashboardWidgets).set(values).where(eq(dashboardWidgets.id, existing.id)));
+  else (await db.insert(dashboardWidgets).values({ userId: user.id, ...values }));
   return Response.json({ version: values.version, activeTab, collapsedSections });
 }

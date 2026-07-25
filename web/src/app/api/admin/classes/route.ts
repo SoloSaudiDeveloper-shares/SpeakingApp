@@ -11,5 +11,5 @@ export async function GET() {
   if (user.role !== 'Admin' && user.role !== 'Teacher') {
     return Response.json({ error: 'Forbidden.' }, { status: 403 });
   }
-  return Response.json({ classes: getDistinctClasses() });
+  return Response.json({ classes: await getDistinctClasses() });
 }

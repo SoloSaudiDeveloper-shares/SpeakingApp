@@ -17,7 +17,7 @@ async function requireTeacherOrAdmin() {
 export async function GET() {
   const auth = await requireTeacherOrAdmin();
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
-  return Response.json({ sessions: getLiveSessions() });
+  return Response.json({ sessions: await getLiveSessions() });
 }
 
 export async function POST(req: Request) {
@@ -27,7 +27,7 @@ export async function POST(req: Request) {
   if (!body.cycleId || !body.taskType) {
     return Response.json({ error: 'cycleId and taskType are required' }, { status: 400 });
   }
-  const session = createLiveSession({
+  const session = await createLiveSession({
     cycleId: Number(body.cycleId),
     createdByUserId: auth.user.id,
     taskType: body.taskType,

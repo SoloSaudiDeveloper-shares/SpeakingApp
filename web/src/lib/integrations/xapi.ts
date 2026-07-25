@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { sqlite } from '@/lib/db';
+import { createHash, randomUUID } from 'node:crypto';
+import { pool } from '@/lib/db';
 
 export type XapiEvidenceKind = 'answered' | 'reviewed' | 'practiced';
 
@@ -8,6 +8,9 @@ const VERBS: Record<XapiEvidenceKind, { id: string; display: string }> = {
   reviewed: { id: 'https://saif.rsaf.mil/verbs/reviewed', display: 'reviewed' },
   practiced: { id: 'https://saif.rsaf.mil/verbs/practiced', display: 'practiced' },
 };
+const MAX_BATCH = 100;
+const MAX_ATTEMPTS = 10;
+const STALE_LOCK_MINUTES = 10;
 
 export function getXapiConfig() {
   const sourceApp = (process.env.XAPI_SOURCE_APP || 'speaking-lab').trim();
@@ -38,32 +41,40 @@ function deterministicUuid(input: string) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function actorSubjectForStudent(studentId: number): string | null {
+async function actorSubjectForStudent(studentId: number): Promise<string | null> {
   const provider = process.env.EXTERNAL_SSO_PROVIDER_ID || 'main-portal';
-  const preferred = sqlite.prepare(`
+  const result = await pool.query<{ subject: string }>(`
     SELECT ei.subject
     FROM user_accounts ua
     JOIN external_identities ei ON ei.user_account_id = ua.id
-    WHERE ua.student_id = ? AND ei.provider = ?
-    ORDER BY COALESCE(ei.last_login_at, ei.updated_at) DESC LIMIT 1
-  `).get(studentId, provider) as { subject: string } | undefined;
-  return preferred?.subject || null;
+    WHERE ua.student_id = $1 AND ei.provider = $2
+    ORDER BY COALESCE(ei.last_login_at, ei.updated_at) DESC
+    LIMIT 1
+  `, [studentId, provider]);
+  return result.rows[0]?.subject ?? null;
 }
 
-export function enqueueXapiForKlpResult(attemptKlpResultId: number, kind: XapiEvidenceKind) {
-  const row = sqlite.prepare(`
-    SELECT akr.id, akr.student_id AS studentId, akr.assessed, akr.passed,
-      akr.success_score_percent AS scorePercent, akr.created_at AS createdAt,
-      kc.concept_id AS conceptId, kc.support_status AS supportStatus
+export async function enqueueXapiForKlpResult(attemptKlpResultId: number, kind: XapiEvidenceKind) {
+  const result = await pool.query<{
+    id: number;
+    studentId: number;
+    assessed: boolean;
+    passed: boolean;
+    scorePercent: number;
+    createdAt: string;
+    conceptId: string;
+    supportStatus: string;
+  }>(`
+    SELECT akr.id, akr.student_id AS "studentId", akr.assessed, akr.passed,
+      akr.success_score_percent AS "scorePercent", akr.created_at AS "createdAt",
+      kc.concept_id AS "conceptId", kc.support_status AS "supportStatus"
     FROM attempt_klp_results akr
     JOIN klp_concepts kc ON kc.id = akr.klp_concept_id
-    WHERE akr.id = ?
-  `).get(attemptKlpResultId) as {
-    id: number; studentId: number; assessed: number; passed: number; scorePercent: number;
-    createdAt: string; conceptId: string; supportStatus: string;
-  } | undefined;
+    WHERE akr.id = $1
+  `, [attemptKlpResultId]);
+  const row = result.rows[0];
   if (!row || !row.assessed || row.supportStatus !== 'speaking_scored' || !row.conceptId.trim()) return null;
-  const actorSubject = actorSubjectForStudent(row.studentId);
+  const actorSubject = await actorSubjectForStudent(row.studentId);
   if (!actorSubject) return null;
   const config = getXapiConfig();
   const verb = VERBS[kind];
@@ -86,92 +97,177 @@ export function enqueueXapiForKlpResult(attemptKlpResultId: number, kind: XapiEv
     timestamp: row.createdAt,
   };
   const now = new Date().toISOString();
-  sqlite.prepare(`
-    INSERT OR IGNORE INTO xapi_outbox(
+  await pool.query(`
+    INSERT INTO xapi_outbox(
       statement_id, attempt_klp_result_id, student_id, actor_subject, verb, statement_json,
       status, attempts, next_attempt_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
-  `).run(statementId, row.id, row.studentId, actorSubject, kind, JSON.stringify(statement), now, now, now);
+    ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'pending', 0, $7, $7, $7)
+    ON CONFLICT (statement_id) DO NOTHING
+  `, [statementId, row.id, row.studentId, actorSubject, kind, JSON.stringify(statement), now]);
   return statementId;
 }
 
-let draining = false;
+type ClaimedRow = { id: number; statementJson: unknown; attempts: number };
+
+async function claimBatch(includeFailed: boolean, owner: string): Promise<ClaimedRow[]> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      UPDATE xapi_outbox
+      SET status = 'failed', lock_owner = NULL, locked_at = NULL,
+        last_error = COALESCE(last_error, 'Recovered stale processing lock.'),
+        next_attempt_at = now(), updated_at = now()
+      WHERE status = 'processing'
+        AND locked_at < now() - ($1::int * interval '1 minute')
+    `, [STALE_LOCK_MINUTES]);
+    const statuses = includeFailed ? ['pending', 'failed'] : ['pending'];
+    const claimed = await client.query<ClaimedRow>(`
+      WITH candidates AS (
+        SELECT id
+        FROM xapi_outbox
+        WHERE status = ANY($1::text[])
+          AND attempts < $2
+          AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+        ORDER BY id
+        FOR UPDATE SKIP LOCKED
+        LIMIT $3
+      )
+      UPDATE xapi_outbox AS xo
+      SET status = 'processing', lock_owner = $4, locked_at = now(), updated_at = now()
+      FROM candidates
+      WHERE xo.id = candidates.id
+      RETURNING xo.id, xo.statement_json AS "statementJson", xo.attempts
+    `, [statuses, MAX_ATTEMPTS, MAX_BATCH, owner]);
+    await client.query('COMMIT');
+    return claimed.rows;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function retryDelaySeconds(attempts: number): number {
+  const capped = Math.min(3600, 30 * 2 ** Math.min(7, attempts));
+  return Math.round(capped * (0.8 + Math.random() * 0.4));
+}
 
 export async function drainXapiOutbox(options: { includeFailed?: boolean } = {}) {
   const config = getXapiConfig();
-  if (!config.enabled || !config.configured || draining) return { sent: 0, skipped: true, error: config.configurationError };
-  draining = true;
+  if (!config.enabled || !config.configured) {
+    return { sent: 0, skipped: true, error: config.configurationError };
+  }
+  const owner = randomUUID();
+  const rows = await claimBatch(options.includeFailed !== false, owner);
+  if (!rows.length) return { sent: 0, skipped: false };
+  const statements = rows.map((row) => row.statementJson);
+  const attemptedAt = new Date().toISOString();
   try {
-    const now = new Date().toISOString();
-    const statuses = options.includeFailed === false ? "('pending')" : "('pending','failed')";
-    const rows = sqlite.prepare(`
-      SELECT id, statement_json AS statementJson, attempts
-      FROM xapi_outbox WHERE status IN ${statuses} AND next_attempt_at <= ?
-      ORDER BY id LIMIT 100
-    `).all(now) as Array<{ id: number; statementJson: string; attempts: number }>;
-    if (!rows.length) return { sent: 0, skipped: false };
-    const statements = rows.map((row) => JSON.parse(row.statementJson));
-    const attemptedAt = new Date().toISOString();
-    try {
-      const response = await fetch(config.lrsUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${config.username}:${config.password}`).toString('base64')}`,
-          'Content-Type': 'application/json',
-          'X-Experience-API-Version': '1.0.3',
-        },
-        body: JSON.stringify(statements),
-      });
-      if (!response.ok) throw Object.assign(new Error((await response.text().catch(() => '')).slice(0, 500) || `LRS returned ${response.status}`), { status: response.status });
-      const sentAt = new Date().toISOString();
-      const markSent = sqlite.prepare(`UPDATE xapi_outbox SET status='sent', attempts=attempts+1, last_attempt_at=?, sent_at=?, last_error=NULL, response_status=?, updated_at=? WHERE id=?`);
-      const transaction = sqlite.transaction(() => rows.forEach((row) => markSent.run(attemptedAt, sentAt, response.status, sentAt, row.id)));
-      transaction();
-      return { sent: rows.length, skipped: false };
-    } catch (error) {
-      const status = Number((error as { status?: number }).status) || null;
-      const message = error instanceof Error ? error.message : String(error);
-      const update = sqlite.prepare(`UPDATE xapi_outbox SET status='failed', attempts=attempts+1, last_attempt_at=?, next_attempt_at=?, last_error=?, response_status=?, updated_at=? WHERE id=?`);
-      const transaction = sqlite.transaction(() => rows.forEach((row) => {
-        const delaySeconds = Math.min(3600, 30 * 2 ** Math.min(7, row.attempts));
-        const next = new Date(Date.now() + delaySeconds * 1000).toISOString();
-        update.run(attemptedAt, next, message.slice(0, 1000), status, attemptedAt, row.id);
-      }));
-      transaction();
-      return { sent: 0, failed: rows.length, skipped: false, error: message };
+    const response = await fetch(config.lrsUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${config.username}:${config.password}`).toString('base64')}`,
+        'Content-Type': 'application/json',
+        'X-Experience-API-Version': '1.0.3',
+      },
+      body: JSON.stringify(statements),
+    });
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).slice(0, 500);
+      throw Object.assign(new Error(detail || `LRS returned ${response.status}`), { status: response.status });
     }
-  } finally {
-    draining = false;
+    const ids = rows.map((row) => row.id);
+    await pool.query(`
+      UPDATE xapi_outbox
+      SET status = 'sent', attempts = attempts + 1, last_attempt_at = $1, sent_at = $1,
+        last_error = NULL, response_status = $2, updated_at = $1,
+        lock_owner = NULL, locked_at = NULL
+      WHERE id = ANY($3::int[]) AND lock_owner = $4
+    `, [attemptedAt, response.status, ids, owner]);
+    return { sent: rows.length, skipped: false };
+  } catch (error) {
+    const status = Number((error as { status?: number }).status) || null;
+    const message = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const row of rows) {
+        const finalFailure = row.attempts + 1 >= MAX_ATTEMPTS;
+        const next = finalFailure
+          ? null
+          : new Date(Date.now() + retryDelaySeconds(row.attempts) * 1000).toISOString();
+        await client.query(`
+          UPDATE xapi_outbox
+          SET status = 'failed', attempts = attempts + 1, last_attempt_at = $1,
+            next_attempt_at = $2, last_error = $3, response_status = $4, updated_at = $1,
+            lock_owner = NULL, locked_at = NULL
+          WHERE id = $5 AND lock_owner = $6
+        `, [attemptedAt, next, message, status, row.id, owner]);
+      }
+      await client.query('COMMIT');
+    } catch (updateError) {
+      await client.query('ROLLBACK');
+      throw updateError;
+    } finally {
+      client.release();
+    }
+    return { sent: 0, failed: rows.length, skipped: false, error: message };
   }
 }
 
-export function getXapiStatus() {
+export async function getXapiStatus() {
   const config = getXapiConfig();
-  const counts = sqlite.prepare(`SELECT status, COUNT(*) AS count FROM xapi_outbox GROUP BY status`).all() as Array<{ status: string; count: number }>;
-  const recentFailures = sqlite.prepare(`SELECT statement_id AS statementId, actor_subject AS actorSubject, verb, attempts, last_error AS lastError, next_attempt_at AS nextAttemptAt FROM xapi_outbox WHERE status='failed' ORDER BY updated_at DESC LIMIT 20`).all();
-  return { ...config, password: undefined, username: config.username ? 'configured' : '', counts: Object.fromEntries(counts.map((row) => [row.status, Number(row.count)])), recentFailures };
+  const counts = await pool.query<{ status: string; count: number }>(
+    `SELECT status, COUNT(*)::int AS count FROM xapi_outbox GROUP BY status`,
+  );
+  const recentFailures = await pool.query(`
+    SELECT statement_id AS "statementId", actor_subject AS "actorSubject", verb, attempts,
+      last_error AS "lastError", next_attempt_at AS "nextAttemptAt"
+    FROM xapi_outbox WHERE status = 'failed' ORDER BY updated_at DESC LIMIT 20
+  `);
+  return {
+    ...config,
+    password: undefined,
+    username: config.username ? 'configured' : '',
+    counts: Object.fromEntries(counts.rows.map((row) => [row.status, Number(row.count)])),
+    recentFailures: recentFailures.rows,
+  };
 }
 
-export function retryXapiFailures(statementIds?: string[]) {
-  const now = new Date().toISOString();
-  if (statementIds?.length) {
-    const placeholders = statementIds.map(() => '?').join(',');
-    return sqlite.prepare(`UPDATE xapi_outbox SET status='pending', next_attempt_at=?, last_error=NULL, updated_at=? WHERE statement_id IN (${placeholders})`).run(now, now, ...statementIds).changes;
-  }
-  return sqlite.prepare(`UPDATE xapi_outbox SET status='pending', next_attempt_at=?, last_error=NULL, updated_at=? WHERE status='failed'`).run(now, now).changes;
+export async function retryXapiFailures(statementIds?: string[]) {
+  const result = statementIds?.length
+    ? await pool.query(`
+        UPDATE xapi_outbox SET status = 'pending', attempts = 0, next_attempt_at = now(), last_error = NULL,
+          updated_at = now(), lock_owner = NULL, locked_at = NULL
+        WHERE statement_id = ANY($1::text[]) AND status = 'failed'
+      `, [statementIds])
+    : await pool.query(`
+        UPDATE xapi_outbox SET status = 'pending', attempts = 0, next_attempt_at = now(), last_error = NULL,
+          updated_at = now(), lock_owner = NULL, locked_at = NULL
+        WHERE status = 'failed'
+      `);
+  return result.rowCount ?? 0;
 }
 
-export function getXapiActorMap() {
+export async function getXapiActorMap() {
   const config = getXapiConfig();
-  const rows = sqlite.prepare(`
-    SELECT ei.provider, ei.subject, ua.username, s.unique_number AS studentCode,
-      (SELECT COUNT(*) FROM xapi_outbox xo WHERE xo.student_id = s.id AND xo.status != 'sent') AS unsent
+  const result = await pool.query<{
+    provider: string;
+    subject: string;
+    username: string;
+    studentCode: string;
+    unsent: number;
+  }>(`
+    SELECT ei.provider, ei.subject, ua.username, s.unique_number AS "studentCode",
+      (SELECT COUNT(*)::int FROM xapi_outbox xo WHERE xo.student_id = s.id AND xo.status != 'sent') AS unsent
     FROM external_identities ei
     JOIN user_accounts ua ON ua.id = ei.user_account_id
     JOIN students s ON s.id = ua.student_id
     ORDER BY ei.provider, ei.subject
-  `).all() as Array<{ provider: string; subject: string; username: string; studentCode: string; unsent: number }>;
-  return rows.map((row) => ({
+  `);
+  return result.rows.map((row) => ({
     provider: row.provider,
     subject: row.subject,
     localStudentCode: row.studentCode,

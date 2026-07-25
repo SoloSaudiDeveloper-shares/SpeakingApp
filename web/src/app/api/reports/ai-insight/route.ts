@@ -32,8 +32,8 @@ export async function POST(request: Request) {
       studentId: Number.isInteger(studentId) && studentId > 0 ? studentId : null,
     };
 
-    const overview = getReportOverview(filters);
-    const studentReport = type === 'student' && filters.studentId ? getStudentReport(filters.studentId, filters) : null;
+    const overview = await getReportOverview(filters);
+    const studentReport = type === 'student' && filters.studentId ? await getStudentReport(filters.studentId, filters) : null;
     const fallback = studentReport?.deterministicInsights?.length
       ? studentReport.deterministicInsights
       : overview.deterministicInsights;
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
         };
 
     try {
-      const provider = getActiveProvider();
+      const provider = await getActiveProvider();
       const result = await callChat([
         {
           role: 'system',
@@ -81,7 +81,7 @@ export async function POST(request: Request) {
         actions: fallback.slice(0, 3),
       });
     } catch (error) {
-      const provider = getActiveProvider();
+      const provider = await getActiveProvider();
       return Response.json({
         aiAvailable: false,
         provider: provider.provider,

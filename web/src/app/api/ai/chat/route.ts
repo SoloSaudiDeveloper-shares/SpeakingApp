@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     const requestBody = body ?? {};
     const rawMessages = Array.isArray(requestBody.messages) ? requestBody.messages : [];
     const scenarioId = typeof requestBody.scenarioId === 'string' ? requestBody.scenarioId : '';
-    const scenario = scenarioId ? (getScenario(scenarioId) ?? getGeneratedScenario(scenarioId)) : null;
+    const scenario = scenarioId ? (getScenario(scenarioId) ?? await getGeneratedScenario(scenarioId)) : null;
     const lastUserMessage = [...rawMessages].reverse().find((m) => m?.role === 'user');
 
     if (scenario && typeof lastUserMessage?.content === 'string') {
@@ -70,7 +70,7 @@ export async function POST(request: Request) {
     const msg = e instanceof Error ? e.message : String(e);
     try {
       const scenarioId = typeof body?.scenarioId === 'string' ? body.scenarioId : '';
-      const scenario = scenarioId ? (getScenario(scenarioId) ?? getGeneratedScenario(scenarioId)) : null;
+      const scenario = scenarioId ? (getScenario(scenarioId) ?? await getGeneratedScenario(scenarioId)) : null;
       if (scenario && /content management|content filter|filtered|policy/i.test(msg)) {
         const reply = guardScenarioTurn(scenario, 'change topic').reply ||
           `Let's stay with this practice: "${scenario.title}". Please answer using the lesson language.`;

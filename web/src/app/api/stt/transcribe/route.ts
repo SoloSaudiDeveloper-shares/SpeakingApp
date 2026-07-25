@@ -18,10 +18,10 @@ export async function POST(req: Request) {
   const user = await getSessionFromToken(token);
   if (!user) return Response.json({ error: 'unauthorized' }, { status: 401 });
 
-  const { apiKey, baseUrl, model } = getTranscriptionConfig();
-  const record = (event: { success: boolean; statusCode?: number; errorCode?: string; noSpeech?: boolean; fallbackUsed?: boolean }) => {
+  const { apiKey, baseUrl, model } = await getTranscriptionConfig();
+  const record = async (event: { success: boolean; statusCode?: number; errorCode?: string; noSpeech?: boolean; fallbackUsed?: boolean }) => {
     try {
-      recordSpeechReliabilityEvent({
+      await recordSpeechReliabilityEvent({
         userId: user.id,
         studentId: user.studentId,
         eventType: 'stt',

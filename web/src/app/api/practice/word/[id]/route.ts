@@ -21,31 +21,29 @@ export async function GET(
     const vocabId = parseInt(id, 10);
     if (isNaN(vocabId)) return Response.json({ error: 'Invalid word ID.' }, { status: 400 });
 
-    const vocab = db.select().from(vocabularyItems).where(eq(vocabularyItems.id, vocabId)).get();
+    const vocab = ((await db.select().from(vocabularyItems).where(eq(vocabularyItems.id, vocabId)).limit(1))[0]);
     if (!vocab) return Response.json({ error: 'Word not found.' }, { status: 404 });
 
     // Get all tasks for this vocabulary item
-    const tasks = db
+    const tasks = (await db
       .select()
       .from(practiceTasks)
-      .where(eq(practiceTasks.vocabularyItemId, vocabId))
-      .all();
+      .where(eq(practiceTasks.vocabularyItemId, vocabId)));
 
     const taskIds = tasks.map((t) => t.id);
 
     // Get all attempts for these tasks by this student
     const wordAttempts = taskIds.length
-      ? db
+      ? (await db
           .select()
           .from(attempts)
           .where(eq(attempts.studentId, user.studentId))
-          .orderBy(desc(attempts.timestamp))
-          .all()
+          .orderBy(desc(attempts.timestamp)))
           .filter((a) => taskIds.includes(a.practiceTaskId))
       : [];
 
     // Get mastery records for this word
-    const mastery = db
+    const mastery = (await db
       .select()
       .from(wordMasteryRecords)
       .where(
@@ -53,8 +51,7 @@ export async function GET(
           eq(wordMasteryRecords.studentId, user.studentId),
           eq(wordMasteryRecords.vocabularyItemId, vocabId)
         )
-      )
-      .all();
+      ));
 
     return Response.json({ vocabulary: vocab, attempts: wordAttempts, mastery: mastery[0] ?? null });
   } catch {

@@ -14,7 +14,7 @@ export async function gradeOpenResponseContent(input: {
   topic?: string;
   fluencyMetrics?: unknown;
 }): Promise<OpenResponseContentGrade> {
-  const cfg = getActiveProvider();
+  const cfg = await getActiveProvider();
   const transcript = input.transcript.trim();
   if (!transcript) return unavailable(cfg.provider, cfg.model);
 

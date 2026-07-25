@@ -40,22 +40,22 @@ const SEQ_KEY = 'stage_default_sequence';
 const MODE_KEY = 'stage_default_unlock_mode';
 const studentKey = (id: number) => `student_${id}_stage_config`;
 
-function getSetting(key: string): string | null {
-  const row = db.select().from(appSettings).where(eq(appSettings.key, key)).get();
+async function getSetting(key: string): Promise<string | null> {
+  const row = ((await db.select().from(appSettings).where(eq(appSettings.key, key)).limit(1))[0]);
   return row?.value ?? null;
 }
 
-function setSetting(key: string, value: string) {
-  const existing = db.select().from(appSettings).where(eq(appSettings.key, key)).get();
+async function setSetting(key: string, value: string) {
+  const existing = ((await db.select().from(appSettings).where(eq(appSettings.key, key)).limit(1))[0]);
   if (existing) {
-    db.update(appSettings).set({ value }).where(eq(appSettings.key, key)).run();
+    (await db.update(appSettings).set({ value }).where(eq(appSettings.key, key)));
   } else {
-    db.insert(appSettings).values({ key, value }).run();
+    (await db.insert(appSettings).values({ key, value }));
   }
 }
 
-function deleteSetting(key: string) {
-  db.delete(appSettings).where(eq(appSettings.key, key)).run();
+async function deleteSetting(key: string) {
+  (await db.delete(appSettings).where(eq(appSettings.key, key)));
 }
 
 /** Validate and normalize a sequence — drop unknown keys, dedupe. */
@@ -78,30 +78,30 @@ function normalizeUnlockMode(input: unknown): UnlockMode {
 }
 
 /** Get the global default config. */
-export function getDefaultStageConfig(): StageConfig {
+export async function getDefaultStageConfig(): Promise<StageConfig> {
   let sequence = DEFAULT_SEQUENCE;
   let unlockMode = DEFAULT_UNLOCK_MODE;
-  const seqRaw = getSetting(SEQ_KEY);
+  const seqRaw = await getSetting(SEQ_KEY);
   if (seqRaw) {
     try { sequence = normalizeSequence(JSON.parse(seqRaw)); } catch { /* keep default */ }
   }
-  const modeRaw = getSetting(MODE_KEY);
+  const modeRaw = await getSetting(MODE_KEY);
   if (modeRaw) unlockMode = normalizeUnlockMode(modeRaw);
   return { sequence, unlockMode };
 }
 
-export function setDefaultStageConfig(cfg: Partial<StageConfig>) {
+export async function setDefaultStageConfig(cfg: Partial<StageConfig>) {
   if (cfg.sequence) {
-    setSetting(SEQ_KEY, JSON.stringify(normalizeSequence(cfg.sequence)));
+    await setSetting(SEQ_KEY, JSON.stringify(normalizeSequence(cfg.sequence)));
   }
   if (cfg.unlockMode) {
-    setSetting(MODE_KEY, normalizeUnlockMode(cfg.unlockMode));
+    await setSetting(MODE_KEY, normalizeUnlockMode(cfg.unlockMode));
   }
 }
 
 /** Get a per-student override (or null if no override set). */
-export function getStudentStageOverride(studentId: number): StageConfig | null {
-  const raw = getSetting(studentKey(studentId));
+export async function getStudentStageOverride(studentId: number): Promise<StageConfig | null> {
+  const raw = await getSetting(studentKey(studentId));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -114,32 +114,32 @@ export function getStudentStageOverride(studentId: number): StageConfig | null {
   }
 }
 
-export function setStudentStageOverride(studentId: number, cfg: StageConfig) {
-  setSetting(studentKey(studentId), JSON.stringify({
+export async function setStudentStageOverride(studentId: number, cfg: StageConfig) {
+  await setSetting(studentKey(studentId), JSON.stringify({
     sequence: normalizeSequence(cfg.sequence),
     unlockMode: normalizeUnlockMode(cfg.unlockMode),
   }));
 }
 
-export function clearStudentStageOverride(studentId: number) {
-  deleteSetting(studentKey(studentId));
+export async function clearStudentStageOverride(studentId: number) {
+  await deleteSetting(studentKey(studentId));
 }
 
 /** Resolve the effective config for a student (override → default). */
-export function getEffectiveStageConfig(studentId: number | null | undefined): StageConfig {
+export async function getEffectiveStageConfig(studentId: number | null | undefined): Promise<StageConfig> {
   if (studentId) {
-    const override = getStudentStageOverride(studentId);
+    const override = await getStudentStageOverride(studentId);
     if (override) return override;
   }
-  return getDefaultStageConfig();
+  return await getDefaultStageConfig();
 }
 
 /** List students that have an override configured. */
-export function listStudentsWithOverrides(): { studentId: number; fullName: string; uniqueNumber: string; config: StageConfig }[] {
-  const allStudents = db.select().from(students).all();
+export async function listStudentsWithOverrides(): Promise<{ studentId: number; fullName: string; uniqueNumber: string; config: StageConfig }[]> {
+  const allStudents = (await db.select().from(students));
   const out: { studentId: number; fullName: string; uniqueNumber: string; config: StageConfig }[] = [];
   for (const s of allStudents) {
-    const cfg = getStudentStageOverride(s.id);
+    const cfg = await getStudentStageOverride(s.id);
     if (cfg) {
       out.push({
         studentId: s.id,

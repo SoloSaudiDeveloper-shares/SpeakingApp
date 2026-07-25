@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     if (!user) return Response.json({ error: 'Session expired.' }, { status: 401 });
 
     const body = await request.json();
-    const scenario = getScenario(body.scenarioId) ?? getGeneratedScenario(body.scenarioId);
+    const scenario = getScenario(body.scenarioId) ?? await getGeneratedScenario(body.scenarioId);
     if (!scenario) return Response.json({ error: 'Unknown scenario.' }, { status: 400 });
 
     const messages: { role: 'user' | 'assistant'; content: string }[] = Array.isArray(body.messages) ? body.messages : [];
@@ -97,11 +97,11 @@ export async function POST(request: Request) {
     // Persist (best effort)
     if (shouldPersist && user.studentId) {
       try {
-        const existing = findScenarioAttemptBySession(sessionId);
+        const existing = await findScenarioAttemptBySession(sessionId);
         if (existing) {
           persisted = true;
         } else {
-        const scenarioAttempt = recordScenarioAttempt({
+        const scenarioAttempt = await recordScenarioAttempt({
           studentId: user.studentId,
           scenarioId: scenario.id,
           transcript: messages,
@@ -112,7 +112,7 @@ export async function POST(request: Request) {
           learnerTurns: userTurnCount,
           completionReason,
         });
-        recordScenarioKlpResults({
+        await recordScenarioKlpResults({
           scenarioAttemptId: scenarioAttempt.id,
           scenarioId: scenario.id,
           studentId: user.studentId,

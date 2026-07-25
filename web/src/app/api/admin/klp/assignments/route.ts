@@ -26,7 +26,7 @@ export async function GET(request: Request) {
       return Response.json({ error: 'cycleId is required.' }, { status: 400 });
     }
     return Response.json({
-      assignments: getHomeworkForTeacher(cycleId).filter((assignment) => assignment.source === 'klp'),
+      assignments: (await getHomeworkForTeacher(cycleId)).filter((assignment) => assignment.source === 'klp'),
     });
   } catch (error) {
     console.error('klp assignments list error:', error);
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Assign at least one KLP or scenario.' }, { status: 400 });
     }
 
-    const assignment = createHomework({
+    const assignment = await createHomework({
       cycleId,
       createdByUserId: auth.id,
       title,

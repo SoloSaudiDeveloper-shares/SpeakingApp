@@ -1,0 +1,20 @@
+title = "Speaking Lab secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Placeholder-only example environment file"
+paths = ['''web/\.env\.example''']
+regexes = [
+  '''replace-me''',
+  '''replace-with-at-least-32-random-characters''',
+]
+
+[[allowlists]]
+description = "Public emulator-only Azurite credential, valid only in local Compose"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+paths = ['''^compose\.yaml$''']
+regexes = ['''AccountKey=c3BlYWtpbmctbGFiLWxvY2FsLWF6dXJpdGUta2V5LTMy;''']

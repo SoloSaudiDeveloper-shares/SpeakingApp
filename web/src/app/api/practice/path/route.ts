@@ -7,7 +7,7 @@ async function load() {
   const user = token ? await getSessionFromToken(token) : null;
   if (!user) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
   if (!user.studentId) return Response.json({ activePath: null, paths: [], legacyAssignments: [] });
-  return Response.json(getLearnerPaths(user.studentId));
+  return Response.json(await getLearnerPaths(user.studentId));
 }
 
 export async function GET() { return load(); }

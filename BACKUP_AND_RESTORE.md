@@ -1,23 +1,33 @@
-# Speaking Lab backup and restore runbook
+# PostgreSQL and Blob backup/restore runbook
 
-The Railway pilot remains a single replica with the SQLite database on its persistent volume. WAL mode and a 10-second busy timeout are configured by the application.
+The Azure release uses PostgreSQL 17 and private Blob Storage. Database rows contain
+only audio object keys; the audio objects have their own retention policy.
 
 ## Before schema changes and deployments
 
-1. Create or switch to a `codex/` Git branch and confirm `git status` contains only expected work.
-2. From `web`, run `npm run backup:data`. This uses SQLite's online-backup API, runs `PRAGMA integrity_check` before and after the copy, records a SHA-256 hash, and writes an audio-file manifest beside the backup.
-3. Trigger a Railway Volume Backup/snapshot in the Railway project before deployment.
-4. Commit the intended code checkpoint. Never add database, audio, `.env`, or backup files to Git.
+1. Confirm the Git branch and working tree contain only the intended release.
+2. From `web`, run `npm run db:check`.
+3. Run `npm run backup:data`. It creates a PostgreSQL custom-format dump, a referenced
+   audio-object manifest, and SHA-256 hashes under `web/data/backups/postgresql`.
+4. Run `npm run backup:restore-test`. The command restores the dump into a new temporary
+   database, verifies both SHA-256 files, the schema, and relationships, and drops the
+   temporary database.
+5. In Azure, start the `speakinglab-backup` Container Apps job. Confirm it succeeds before
+   starting the migration job.
+6. Record the commit SHA, dump hash, Azure job execution ID, and operator in the release log.
 
-Backups are written below `data/backups` locally or below `$SPEAKING_LAB_DATA_DIR/backups` in a deployed environment.
+The deployment workflow performs steps 5–6 before every migration. PostgreSQL Flexible
+Server also retains 14 days of point-in-time restore history.
 
-## Restore drill
+## Restore
 
-1. Stop the application so no process has the live database open.
-2. Preserve the current database and its `-wal`/`-shm` files under a dated incident folder.
-3. Copy the selected backup to `<data-dir>/speakinglab.db`; do not copy stale `-wal`/`-shm` files with it.
-4. Run `npm run backup:restore-test` to verify the latest backup opens and passes `PRAGMA integrity_check`.
-5. Start one application replica, check `/api/health`, authenticate as each role, and verify a learner attempt plus its audio link.
-6. Record the tested backup filename, hash, operator, and time in the deployment log.
+1. Do not overwrite the live database. Restore PostgreSQL PITR or the logical dump to a
+   new server/database.
+2. Set a temporary revision or local verification environment to the restored database.
+3. Run `npm run db:check`, authenticate each role, open representative historical attempts,
+   and verify that referenced private audio objects are available.
+4. Run the SAIF signed-launch and mock-LRS checks.
+5. Move traffic only after parity checks pass. Preserve the incident database and audit log.
 
-If Railway volume restore is used, restore into a separate service or cloned volume first, validate it, and only then replace the production service volume.
+Blob soft-delete and container-delete retention are both 14 days. Restore deleted audio
+objects before promoting a database whose rows reference them.

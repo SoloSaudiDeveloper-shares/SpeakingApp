@@ -12,6 +12,7 @@ import {
 } from '@/lib/db/schema';
 import { hashPassword } from '@/lib/utils/password';
 import { getCurrentCycle, getStudentAttempts, getWordMastery } from '@/lib/actions/practice-actions';
+import { hashSessionToken } from '@/lib/actions/auth-actions';
 
 export type ExternalRole = 'Student' | 'Teacher' | 'Admin';
 
@@ -170,18 +171,18 @@ function externalUsername(provider: string, subject: string): string {
   return `${provider}:${subject}`;
 }
 
-function chooseUniqueNumber(input: ExternalUserInput): string {
+async function chooseUniqueNumber(input: ExternalUserInput): Promise<string> {
   // The signed pseudonymous `sub` is the only SAIF learner key. Never use a
   // display name, email, or unsigned alternate student-number claim for linking.
   const preferred = input.subject.trim();
-  const existing = db.select().from(students).where(eq(students.uniqueNumber, preferred)).get();
+  const existing = ((await db.select().from(students).where(eq(students.uniqueNumber, preferred)).limit(1))[0]);
   if (!existing) return preferred;
   const fallback = externalUsername(input.provider, input.subject);
-  const existingFallback = db.select().from(students).where(eq(students.uniqueNumber, fallback)).get();
+  const existingFallback = ((await db.select().from(students).where(eq(students.uniqueNumber, fallback)).limit(1))[0]);
   return existingFallback ? `${fallback}:${nanoid(8)}` : fallback;
 }
 
-export function upsertExternalUser(input: ExternalUserInput) {
+export async function upsertExternalUser(input: ExternalUserInput) {
   const now = new Date().toISOString();
   const provider = input.provider.trim();
   const subject = input.subject.trim();
@@ -193,39 +194,36 @@ export function upsertExternalUser(input: ExternalUserInput) {
     throw new IntegrationError('External admin provisioning is disabled.', 403);
   }
 
-  const identity = db
+  const identity = ((await db
     .select()
     .from(externalIdentities)
-    .where(and(eq(externalIdentities.provider, provider), eq(externalIdentities.subject, subject)))
-    .get();
+    .where(and(eq(externalIdentities.provider, provider), eq(externalIdentities.subject, subject))).limit(1))[0]);
 
   if (identity) {
-    const user = db.select().from(userAccounts).where(eq(userAccounts.id, identity.userAccountId)).get();
+    const user = ((await db.select().from(userAccounts).where(eq(userAccounts.id, identity.userAccountId)).limit(1))[0]);
     if (!user) throw new IntegrationError('Linked local user was not found.', 404);
 
     let studentId = user.studentId;
     if (role === 'Student') {
       if (studentId) {
-        db.update(students)
+        (await db.update(students)
           .set({ fullName: input.displayName, class: input.className ?? null, isActive: true })
-          .where(eq(students.id, studentId))
-          .run();
+          .where(eq(students.id, studentId)));
       } else {
-        const stableStudent = db.select().from(students).where(eq(students.uniqueNumber, subject)).get();
+        const stableStudent = ((await db.select().from(students).where(eq(students.uniqueNumber, subject)).limit(1))[0]);
         if (stableStudent) {
           studentId = stableStudent.id;
-          db.update(students).set({ class: input.className ?? stableStudent.class, isActive: true }).where(eq(students.id, studentId)).run();
+          (await db.update(students).set({ class: input.className ?? stableStudent.class, isActive: true }).where(eq(students.id, studentId)));
         } else {
-        const [student] = db.insert(students)
+        const [student] = (await db.insert(students)
           .values({
-            uniqueNumber: chooseUniqueNumber(input),
+            uniqueNumber: await chooseUniqueNumber(input),
             fullName: input.displayName,
             class: input.className ?? null,
             cefrBand: 'A1',
             isActive: true,
           })
-          .returning()
-          .all();
+          .returning());
         studentId = student.id;
         }
       }
@@ -233,7 +231,7 @@ export function upsertExternalUser(input: ExternalUserInput) {
       studentId = null;
     }
 
-    db.update(userAccounts)
+    (await db.update(userAccounts)
       .set({
         role,
         studentId,
@@ -241,12 +239,10 @@ export function upsertExternalUser(input: ExternalUserInput) {
         isActive: true,
         lastLoginAt: now,
       })
-      .where(eq(userAccounts.id, user.id))
-      .run();
-    db.update(externalIdentities)
+      .where(eq(userAccounts.id, user.id)));
+    (await db.update(externalIdentities)
       .set({ role, updatedAt: now, lastLoginAt: now })
-      .where(eq(externalIdentities.id, identity.id))
-      .run();
+      .where(eq(externalIdentities.id, identity.id)));
 
     return {
       id: user.id,
@@ -259,38 +255,35 @@ export function upsertExternalUser(input: ExternalUserInput) {
 
   const username = role === 'Student' ? subject : externalUsername(provider, subject);
   const stableStudent = role === 'Student'
-    ? db.select().from(students).where(eq(students.uniqueNumber, subject)).get()
+    ? ((await db.select().from(students).where(eq(students.uniqueNumber, subject)).limit(1))[0])
     : null;
-  const existingUser = db.select().from(userAccounts).where(eq(userAccounts.username, username)).get()
-    ?? (stableStudent ? db.select().from(userAccounts).where(eq(userAccounts.studentId, stableStudent.id)).get() : undefined);
+  const existingUser = ((await db.select().from(userAccounts).where(eq(userAccounts.username, username)).limit(1))[0])
+    ?? (stableStudent ? ((await db.select().from(userAccounts).where(eq(userAccounts.studentId, stableStudent.id)).limit(1))[0]) : undefined);
   if (existingUser) {
     let studentId = existingUser.studentId;
     if (role === 'Student' && !studentId && stableStudent) {
       studentId = stableStudent.id;
     } else if (role === 'Student' && !studentId) {
-      const [student] = db.insert(students)
+      const [student] = (await db.insert(students)
         .values({
-          uniqueNumber: chooseUniqueNumber(input),
+          uniqueNumber: await chooseUniqueNumber(input),
           fullName: input.displayName,
           class: input.className ?? null,
           cefrBand: 'A1',
           isActive: true,
         })
-        .returning()
-        .all();
+        .returning());
       studentId = student.id;
     }
     if (role === 'Student' && studentId) {
-      db.update(students)
+      (await db.update(students)
         .set({ fullName: input.displayName, class: input.className ?? null, isActive: true })
-        .where(eq(students.id, studentId))
-        .run();
+        .where(eq(students.id, studentId)));
     }
-    db.update(userAccounts)
+    (await db.update(userAccounts)
       .set({ role, studentId: role === 'Student' ? studentId : null, displayName: input.displayName, isActive: true, lastLoginAt: now })
-      .where(eq(userAccounts.id, existingUser.id))
-      .run();
-    db.insert(externalIdentities)
+      .where(eq(userAccounts.id, existingUser.id)));
+    (await db.insert(externalIdentities)
       .values({
         provider,
         subject,
@@ -299,8 +292,7 @@ export function upsertExternalUser(input: ExternalUserInput) {
         createdAt: now,
         updatedAt: now,
         lastLoginAt: now,
-      })
-      .run();
+      }));
     return {
       id: existingUser.id,
       username: existingUser.username,
@@ -312,20 +304,19 @@ export function upsertExternalUser(input: ExternalUserInput) {
 
   let studentId: number | null = stableStudent?.id ?? null;
   if (role === 'Student' && !studentId) {
-    const [student] = db.insert(students)
+    const [student] = (await db.insert(students)
       .values({
-        uniqueNumber: chooseUniqueNumber(input),
+        uniqueNumber: await chooseUniqueNumber(input),
         fullName: input.displayName,
         class: input.className ?? null,
         cefrBand: 'A1',
         isActive: true,
       })
-      .returning()
-      .all();
+      .returning());
     studentId = student.id;
   }
 
-  const [user] = db.insert(userAccounts)
+  const [user] = (await db.insert(userAccounts)
     .values({
       username,
       passwordHash: hashPassword(nanoid(48)),
@@ -336,10 +327,9 @@ export function upsertExternalUser(input: ExternalUserInput) {
       createdAt: now,
       lastLoginAt: now,
     })
-    .returning()
-    .all();
+    .returning());
 
-  db.insert(externalIdentities)
+  (await db.insert(externalIdentities)
     .values({
       provider,
       subject,
@@ -348,8 +338,7 @@ export function upsertExternalUser(input: ExternalUserInput) {
       createdAt: now,
       updatedAt: now,
       lastLoginAt: now,
-    })
-    .run();
+    }));
 
   return {
     id: user.id,
@@ -360,42 +349,39 @@ export function upsertExternalUser(input: ExternalUserInput) {
   };
 }
 
-export function createSessionForUser(userId: number): string {
+export async function createSessionForUser(userId: number): Promise<string> {
   const token = nanoid(48);
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 7);
-  db.insert(sessions)
-    .values({ token, userId, expiresAt: expiresAt.toISOString() })
-    .run();
+  (await db.insert(sessions)
+    .values({ tokenHash: hashSessionToken(token), userId, expiresAt: expiresAt.toISOString() }));
   return token;
 }
 
-export function consumeLaunchJti(provider: string, jti: string, userAccountId: number, exp: number) {
-  const existing = db
+export async function consumeLaunchJti(provider: string, jti: string, userAccountId: number, exp: number) {
+  const existing = ((await db
     .select()
     .from(externalSsoLaunches)
-    .where(and(eq(externalSsoLaunches.provider, provider), eq(externalSsoLaunches.jti, jti)))
-    .get();
+    .where(and(eq(externalSsoLaunches.provider, provider), eq(externalSsoLaunches.jti, jti))).limit(1))[0]);
   if (existing) throw new IntegrationError('Launch token has already been used.', 401);
 
-  db.insert(externalSsoLaunches)
+  (await db.insert(externalSsoLaunches)
     .values({
       provider,
       jti,
       userAccountId,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(exp * 1000).toISOString(),
-    })
-    .run();
+    }));
 }
 
-export function launchExternalSso(token: string) {
+export async function launchExternalSso(token: string) {
   const config = getExternalSsoConfig();
   const payload = verifySignedLaunchToken(token, config);
   const role = normalizeRole(String(payload.role));
   if (!role) throw new IntegrationError('Launch token role is not allowed.', 403);
 
-  const user = upsertExternalUser({
+  const user = await upsertExternalUser({
     provider: config.providerId,
     subject: payload.sub,
     role,
@@ -406,20 +392,19 @@ export function launchExternalSso(token: string) {
     classId: payload.classId,
   });
 
-  consumeLaunchJti(config.providerId, payload.jti, user.id, payload.exp);
+  await consumeLaunchJti(config.providerId, payload.jti, user.id, payload.exp);
   return {
     user,
-    token: createSessionForUser(user.id),
+    token: await createSessionForUser(user.id),
     redirectTo: isSafeRedirectPath(payload.redirectTo) ? payload.redirectTo : '/dashboard',
   };
 }
 
-export function findExternalIdentity(provider: string, subject: string) {
-  return db
+export async function findExternalIdentity(provider: string, subject: string) {
+  return ((await db
     .select()
     .from(externalIdentities)
-    .where(and(eq(externalIdentities.provider, provider), eq(externalIdentities.subject, subject)))
-    .get();
+    .where(and(eq(externalIdentities.provider, provider), eq(externalIdentities.subject, subject))).limit(1))[0]);
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -442,19 +427,19 @@ function weakPronunciationWordsFromAttempts(rows: Array<{ metricsJson: string | 
   return weak;
 }
 
-export function getExternalStudentSummary(provider: string, subject: string) {
-  const identity = findExternalIdentity(provider, subject);
+export async function getExternalStudentSummary(provider: string, subject: string) {
+  const identity = await findExternalIdentity(provider, subject);
   if (!identity) throw new IntegrationError('External identity was not found.', 404);
-  const user = db.select().from(userAccounts).where(eq(userAccounts.id, identity.userAccountId)).get();
+  const user = ((await db.select().from(userAccounts).where(eq(userAccounts.id, identity.userAccountId)).limit(1))[0]);
   if (!user?.studentId) throw new IntegrationError('External identity is not linked to a student.', 404);
-  const student = db.select().from(students).where(eq(students.id, user.studentId)).get();
+  const student = ((await db.select().from(students).where(eq(students.id, user.studentId)).limit(1))[0]);
   if (!student) throw new IntegrationError('Student was not found.', 404);
 
-  const cycleData = getCurrentCycle(student.id);
+  const cycleData = await getCurrentCycle(student.id);
   const recentAttempts = cycleData
-    ? getStudentAttempts(student.id, cycleData.cycle.id).slice(0, 10)
-    : db.select().from(attempts).where(eq(attempts.studentId, student.id)).orderBy(desc(attempts.timestamp)).limit(10).all();
-  const mastery = cycleData ? getWordMastery(student.id, cycleData.cycle.id) : [];
+    ? (await getStudentAttempts(student.id, cycleData.cycle.id)).slice(0, 10)
+    : (await db.select().from(attempts).where(eq(attempts.studentId, student.id)).orderBy(desc(attempts.timestamp)).limit(10));
+  const mastery = cycleData ? await getWordMastery(student.id, cycleData.cycle.id) : [];
   const weakPronunciation = weakPronunciationWordsFromAttempts(recentAttempts);
   const weakMastery = mastery.filter((item) => item.masteryStatus !== 'Mastered');
   const weakWordCount = new Set([

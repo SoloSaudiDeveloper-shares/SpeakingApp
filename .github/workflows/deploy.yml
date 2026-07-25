@@ -1,0 +1,128 @@
+name: Deploy Azure revision
+
+on:
+  workflow_run:
+    workflows: ["PostgreSQL release gates"]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: speaking-lab-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    environment: production
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve Azure resources
+        shell: bash
+        run: |
+          echo "ACR_SERVER=$(az acr show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_ACR_NAME }}' --query loginServer -o tsv)" >> "$GITHUB_ENV"
+          echo "OLD_IMAGE=$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_CONTAINER_APP }}' --query 'properties.template.containers[0].image' -o tsv)" >> "$GITHUB_ENV"
+          echo "OLD_MIGRATION_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_MIGRATION_JOB }}' --query 'properties.template.containers[0].image' -o tsv)" >> "$GITHUB_ENV"
+          echo "OLD_BACKUP_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_BACKUP_JOB }}' --query 'properties.template.containers[0].image' -o tsv)" >> "$GITHUB_ENV"
+          echo "OLD_XAPI_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_XAPI_JOB }}' --query 'properties.template.containers[0].image' -o tsv)" >> "$GITHUB_ENV"
+
+      - name: Build immutable application and jobs images
+        shell: bash
+        run: |
+          az acr login --name '${{ vars.AZURE_ACR_NAME }}'
+          docker build --target runner -t "$ACR_SERVER/speaking-lab:${RELEASE_SHA}" .
+          docker build --target jobs -t "$ACR_SERVER/speaking-lab-jobs:${RELEASE_SHA}" .
+          docker push "$ACR_SERVER/speaking-lab:${RELEASE_SHA}"
+          docker push "$ACR_SERVER/speaking-lab-jobs:${RELEASE_SHA}"
+
+      - name: Point backup and migration jobs at the immutable image
+        shell: bash
+        run: |
+          for job in '${{ vars.AZURE_MIGRATION_JOB }}' '${{ vars.AZURE_BACKUP_JOB }}'; do
+            az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n "$job" \
+              --image "$ACR_SERVER/speaking-lab-jobs:${RELEASE_SHA}"
+          done
+
+      - name: Pre-migration logical backup
+        shell: bash
+        run: |
+          execution=$(az containerapp job start -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_BACKUP_JOB }}' --query name -o tsv)
+          for attempt in {1..60}; do
+            status=$(az containerapp job execution show -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+              -n '${{ vars.AZURE_BACKUP_JOB }}' --job-execution-name "$execution" --query properties.status -o tsv)
+            [ "$status" = "Succeeded" ] && exit 0
+            [ "$status" = "Failed" ] && exit 1
+            sleep 10
+          done
+          exit 1
+
+      - name: Apply backward-compatible migrations
+        shell: bash
+        run: |
+          execution=$(az containerapp job start -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_MIGRATION_JOB }}' --query name -o tsv)
+          for attempt in {1..90}; do
+            status=$(az containerapp job execution show -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+              -n '${{ vars.AZURE_MIGRATION_JOB }}' --job-execution-name "$execution" --query properties.status -o tsv)
+            [ "$status" = "Succeeded" ] && exit 0
+            [ "$status" = "Failed" ] && exit 1
+            sleep 10
+          done
+          exit 1
+
+      - name: Update the scheduled xAPI worker after migration
+        shell: bash
+        run: |
+          az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_XAPI_JOB }}' \
+            --image "$ACR_SERVER/speaking-lab-jobs:${RELEASE_SHA}"
+
+      - name: Deploy and verify new revision
+        id: rollout
+        continue-on-error: true
+        shell: bash
+        run: |
+          az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_CONTAINER_APP }}' \
+            --image "$ACR_SERVER/speaking-lab:${RELEASE_SHA}" \
+            --set-env-vars "APP_COMMIT_SHA=${RELEASE_SHA}"
+          url="https://$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_CONTAINER_APP }}' --query properties.configuration.ingress.fqdn -o tsv)"
+          for attempt in {1..40}; do
+            curl --fail --silent --show-error "$url/api/health/ready" && \
+              curl --fail --silent --show-error "$url/" >/dev/null && exit 0
+            sleep 10
+          done
+          exit 1
+
+      - name: Roll back application and job images after any failure
+        if: failure() || steps.rollout.outcome == 'failure'
+        shell: bash
+        run: |
+          set +e
+          az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_CONTAINER_APP }}' --image "$OLD_IMAGE"
+          az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_MIGRATION_JOB }}' --image "$OLD_MIGRATION_IMAGE"
+          az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_BACKUP_JOB }}' --image "$OLD_BACKUP_IMAGE"
+          az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_XAPI_JOB }}' --image "$OLD_XAPI_IMAGE"
+          exit 1

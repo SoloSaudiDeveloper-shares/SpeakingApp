@@ -27,7 +27,7 @@ export async function GET() {
       return unauthorized('Not authenticated.');
     }
 
-    const user = await getSessionFromToken(token);
+    const user = await getSessionFromToken(token, { allowPasswordChange: true });
     if (!user) {
       return unauthorized('Session expired.');
     }

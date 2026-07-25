@@ -20,7 +20,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const { id } = await params;
   const body = await req.json();
   if (body.action === 'end') {
-    endLiveSession(Number(id));
+    await endLiveSession(Number(id));
     return Response.json({ ok: true });
   }
   return Response.json({ error: 'Unknown action' }, { status: 400 });
@@ -30,6 +30,6 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   const auth = await requireTeacherOrAdmin();
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
   const { id } = await params;
-  deleteLiveSession(Number(id));
+  await deleteLiveSession(Number(id));
   return Response.json({ ok: true });
 }

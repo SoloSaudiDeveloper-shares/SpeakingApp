@@ -11,7 +11,7 @@ export async function GET(
 
   try {
     const { provider, subject } = await params;
-    const summary = getExternalStudentSummary(decodeURIComponent(provider), decodeURIComponent(subject));
+    const summary = await getExternalStudentSummary(decodeURIComponent(provider), decodeURIComponent(subject));
     const url = new URL(request.url);
     const limit = Number(url.searchParams.get('limit') || 100);
     return Response.json({

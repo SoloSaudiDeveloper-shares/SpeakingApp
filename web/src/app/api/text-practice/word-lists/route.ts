@@ -12,7 +12,7 @@ export async function GET() {
     if (!user) return Response.json({ error: 'Session expired.' }, { status: 401 });
     if (!user.studentId) return Response.json({ error: 'Not a student.' }, { status: 403 });
 
-    const lists = getStudentWordLists(user.studentId);
+    const lists = await getStudentWordLists(user.studentId);
     return Response.json({ lists });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
 
     // Handle delete action
     if (body.action === 'delete' && body.id) {
-      deleteWordList(body.id);
+      await deleteWordList(body.id);
       return Response.json({ success: true });
     }
 
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Name and words are required.' }, { status: 400 });
     }
 
-    const list = saveWordList(user.studentId, name, words);
+    const list = await saveWordList(user.studentId, name, words);
     return Response.json({ list });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });

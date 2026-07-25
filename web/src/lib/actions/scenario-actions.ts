@@ -2,7 +2,7 @@ import { db } from '../db';
 import { scenarioAttempts } from '../db/schema';
 import { eq, desc } from 'drizzle-orm';
 
-export function recordScenarioAttempt(data: {
+export async function recordScenarioAttempt(data: {
   studentId: number;
   scenarioId: string;
   transcript: { role: string; content: string }[];
@@ -13,9 +13,7 @@ export function recordScenarioAttempt(data: {
   learnerTurns: number;
   completionReason: 'manual' | 'goals-met' | 'max-turns';
 }) {
-  const existing = db.select().from(scenarioAttempts).where(eq(scenarioAttempts.sessionId, data.sessionId)).get();
-  if (existing) return existing;
-  return db
+  const [inserted] = await db
     .insert(scenarioAttempts)
     .values({
       studentId: data.studentId,
@@ -29,20 +27,23 @@ export function recordScenarioAttempt(data: {
       completionReason: data.completionReason,
       createdAt: new Date().toISOString(),
     })
-    .returning()
-    .get();
+    .onConflictDoNothing({ target: scenarioAttempts.sessionId })
+    .returning();
+  if (inserted) return inserted;
+  const existing = ((await db.select().from(scenarioAttempts).where(eq(scenarioAttempts.sessionId, data.sessionId)).limit(1))[0]);
+  if (!existing) throw new Error('Scenario attempt could not be persisted.');
+  return existing;
 }
 
-export function findScenarioAttemptBySession(sessionId: string) {
-  return db.select().from(scenarioAttempts).where(eq(scenarioAttempts.sessionId, sessionId)).get();
+export async function findScenarioAttemptBySession(sessionId: string) {
+  return ((await db.select().from(scenarioAttempts).where(eq(scenarioAttempts.sessionId, sessionId)).limit(1))[0]);
 }
 
-export function getScenarioHistory(studentId: number, limit = 50) {
-  return db
+export async function getScenarioHistory(studentId: number, limit = 50) {
+  return (await db
     .select()
     .from(scenarioAttempts)
     .where(eq(scenarioAttempts.studentId, studentId))
     .orderBy(desc(scenarioAttempts.createdAt))
-    .limit(limit)
-    .all();
+    .limit(limit));
 }

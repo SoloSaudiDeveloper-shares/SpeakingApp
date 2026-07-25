@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const result = launchExternalSso(token);
+    const result = await launchExternalSso(token);
     const redirectUrl = new URL(result.redirectTo, request.url);
     const response = NextResponse.redirect(redirectUrl);
     response.cookies.set('session-token', result.token, {

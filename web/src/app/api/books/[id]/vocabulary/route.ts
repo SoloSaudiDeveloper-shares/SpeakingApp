@@ -16,7 +16,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const auth = await requireAdmin();
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
   const { id } = await params;
-  const data = getBookWithVocabulary(Number(id));
+  const data = await getBookWithVocabulary(Number(id));
   if (!data) return Response.json({ error: 'Not found.' }, { status: 404 });
   return Response.json({ vocabulary: data.vocabulary });
 }
@@ -29,6 +29,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!body.word || typeof body.word !== 'string') {
     return Response.json({ error: 'word is required' }, { status: 400 });
   }
-  const item = addVocabularyItem(Number(id), body);
+  const item = await addVocabularyItem(Number(id), body);
   return Response.json({ item });
 }

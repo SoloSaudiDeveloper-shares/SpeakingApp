@@ -90,7 +90,7 @@ export default function AdminStatusPage() {
             <Database size={16} className="text-emerald-400" />
             <span className="text-sm font-medium text-foreground">Database</span>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">SQLite (better-sqlite3) - Connected</p>
+          <p className="mt-1 text-xs text-muted-foreground">PostgreSQL 17 — readiness monitored</p>
         </div>
       </div>
 

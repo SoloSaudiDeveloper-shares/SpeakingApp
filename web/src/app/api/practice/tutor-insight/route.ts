@@ -35,7 +35,7 @@ export async function GET() {
     const user = await getSessionFromToken(token);
     if (!user?.studentId) return Response.json({ error: 'Student only.' }, { status: 403 });
 
-    const summary = getStudentTutorInsight(user.studentId);
+    const summary = await getStudentTutorInsight(user.studentId);
     if (!summary) return Response.json({ error: 'Student was not found.' }, { status: 404 });
 
     try {
@@ -74,7 +74,7 @@ export async function GET() {
         raw: result.content.slice(0, 500),
       });
     } catch (error) {
-      const provider = getActiveProvider();
+      const provider = await getActiveProvider();
       return Response.json({
         aiAvailable: false,
         provider: provider.provider,

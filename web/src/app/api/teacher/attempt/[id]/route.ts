@@ -22,13 +22,13 @@ export async function GET(
     const attemptId = parseInt(id, 10);
     if (isNaN(attemptId)) return Response.json({ error: 'Invalid attempt ID.' }, { status: 400 });
 
-    const attempt = db.select().from(attempts).where(eq(attempts.id, attemptId)).get();
+    const attempt = ((await db.select().from(attempts).where(eq(attempts.id, attemptId)).limit(1))[0]);
     if (!attempt) return Response.json({ error: 'Attempt not found.' }, { status: 404 });
 
-    const task = db.select().from(practiceTasks).where(eq(practiceTasks.id, attempt.practiceTaskId)).get();
-    const student = db.select().from(students).where(eq(students.id, attempt.studentId)).get();
+    const task = ((await db.select().from(practiceTasks).where(eq(practiceTasks.id, attempt.practiceTaskId)).limit(1))[0]);
+    const student = ((await db.select().from(students).where(eq(students.id, attempt.studentId)).limit(1))[0]);
     const vocab = task?.vocabularyItemId
-      ? db.select().from(vocabularyItems).where(eq(vocabularyItems.id, task.vocabularyItemId)).get()
+      ? ((await db.select().from(vocabularyItems).where(eq(vocabularyItems.id, task.vocabularyItemId)).limit(1))[0])
       : null;
 
     return Response.json({ attempt, task, student, vocabulary: vocab });
@@ -61,7 +61,7 @@ export async function POST(
     if (isNaN(score) || score < 0 || score > 1)
       return Response.json({ error: 'Score must be between 0 and 1.' }, { status: 400 });
 
-    overrideAttemptScore(attemptId, score, notes);
+    await overrideAttemptScore(attemptId, score, notes);
 
     return Response.json({ success: true });
   } catch {

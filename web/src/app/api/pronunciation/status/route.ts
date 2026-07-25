@@ -9,7 +9,7 @@ export async function GET() {
   const user = await getSessionFromToken(token);
   if (!user) return Response.json({ error: 'unauthorized' }, { status: 401 });
 
-  const { apiKey, region } = getPronunciationConfig();
+  const { apiKey, region } = await getPronunciationConfig();
   return Response.json({
     configured: !!apiKey,
     provider: 'azure',

@@ -7,7 +7,7 @@ export async function POST(request: Request) {
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
   const body = await request.json().catch(() => ({}));
   const statementIds = Array.isArray(body.statementIds) ? body.statementIds.map(String).filter(Boolean) : undefined;
-  const queued = retryXapiFailures(statementIds);
+  const queued = await retryXapiFailures(statementIds);
   after(() => drainXapiOutbox({ includeFailed: true }));
   return Response.json({ queued });
 }

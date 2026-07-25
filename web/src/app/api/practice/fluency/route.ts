@@ -120,15 +120,14 @@ export async function POST(request: Request) {
 
     const cycleId = toPositiveIntOrNull(body.cycleId);
     if (cycleId) {
-      const enrollment = db
+      const enrollment = ((await db
         .select()
         .from(studentCycles)
-        .where(and(eq(studentCycles.studentId, user.studentId), eq(studentCycles.cycleId, cycleId)))
-        .get();
+        .where(and(eq(studentCycles.studentId, user.studentId), eq(studentCycles.cycleId, cycleId))).limit(1))[0]);
       if (!enrollment) return Response.json({ error: 'Not enrolled in this cycle.' }, { status: 403 });
     }
 
-    const student = db.select().from(students).where(eq(students.id, user.studentId)).get();
+    const student = ((await db.select().from(students).where(eq(students.id, user.studentId)).limit(1))[0]);
     const cefrBand = coerceBand(student?.cefrBand);
     const roundInputs: RoundInput[] = Array.isArray(body.rounds)
       ? body.rounds.filter((round: unknown): round is RoundInput => !!round && typeof round === 'object' && !Array.isArray(round))
@@ -148,7 +147,7 @@ export async function POST(request: Request) {
           ? Math.round(((rounds as ReturnType<typeof sanitizeShadowingRounds>).reduce((sum, round) => sum + round.composite, 0) / rounds.length) * 1000) / 1000
           : 0);
 
-    const session = recordFluencyDrill({
+    const session = await recordFluencyDrill({
       studentId: user.studentId,
       cycleId,
       drillType: body.drillType,
@@ -173,7 +172,7 @@ export async function GET() {
     if (!user) return Response.json({ error: 'Session expired.' }, { status: 401 });
     if (!user.studentId) return Response.json({ sessions: [] });
 
-    return Response.json({ sessions: getFluencyDrillHistory(user.studentId) });
+    return Response.json({ sessions: await getFluencyDrillHistory(user.studentId) });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });
   }

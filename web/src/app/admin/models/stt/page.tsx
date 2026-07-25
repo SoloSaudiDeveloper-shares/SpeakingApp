@@ -59,11 +59,11 @@ const STT_MODELS = [
     wer: "~5%",
     size: "0 MB",
     description:
-      "Browser built-in. Sends audio to Google servers for transcription. Does NOT work in the packaged Electron app.",
+      "Browser built-in. When supported, sends audio to the browser vendor's speech service.",
     pros: ["Real-time streaming"],
     cons: [
       "Requires internet",
-      "Does not work in the standalone app",
+      "Availability depends on browser policy",
       "Chrome/Edge only",
     ],
   },

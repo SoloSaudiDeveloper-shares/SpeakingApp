@@ -145,11 +145,7 @@ export class TransformersEngine implements SpeechEngine {
       const isBundledModel = this.engineId === "webai-whisper-tiny"
       await configureOrtEnv(env, { allowRemoteModels: !isBundledModel })
 
-      // Detect Electron — its Chromium WebGPU is missing several subgroup
-      // features that Transformers.js v4 expects (e.g. subgroupMinSize).
-      // Force the WASM backend there to avoid runtime errors.
-      const isElectron = typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent)
-      const useWebGPU = !isElectron && (await this.tryWebGPU())
+      const useWebGPU = await this.tryWebGPU()
       // Try the preferred device first, then fall back to WASM if it errors.
       const deviceCandidates: ("webgpu" | "wasm")[] = useWebGPU ? ["webgpu", "wasm"] : ["wasm"]
 

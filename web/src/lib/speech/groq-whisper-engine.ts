@@ -3,12 +3,11 @@
 import type { SpeechEngine, SpeechRecognitionResult, STTEngineId } from "./types"
 import { TransformersEngine } from "./transformers-engine"
 import { analyzeAudio, hasRealSpeech, isLikelyHallucination, type AudioStats } from "./audio-analysis"
+import { buildOverlappingChunkRanges, mergeTimestampedWordChunks, retryOnce } from "./groq-chunking"
 
 const LOCAL_FALLBACK_ENGINE: STTEngineId = "webai-whisper-tiny"
 const TARGET_RATE = 16000
 const LONG_RECORDING_SECONDS = 45
-const CHUNK_SECONDS = 30
-const OVERLAP_SECONDS = 1
 
 let fallbackAllowed: boolean | null = null
 let fallbackFetchedAt = 0
@@ -79,14 +78,6 @@ async function cloudTranscribe(blob: Blob, filename: string): Promise<CloudResul
   }
 }
 
-async function cloudTranscribeWithRetry(blob: Blob, filename: string) {
-  let lastError: unknown
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try { return await cloudTranscribe(blob, filename) } catch (error) { lastError = error }
-  }
-  throw lastError
-}
-
 export class GroqWhisperEngine implements SpeechEngine {
   readonly name = "Groq Whisper (cloud)"
   readonly isOffline = false
@@ -132,25 +123,19 @@ export class GroqWhisperEngine implements SpeechEngine {
     }
 
     if (decoded && decoded.duration > LONG_RECORDING_SECONDS) {
-      const step = (CHUNK_SECONDS - OVERLAP_SECONDS) * TARGET_RATE
-      const chunkLength = CHUNK_SECONDS * TARGET_RATE
-      const merged: Array<{ word: string; start: number; end: number }> = []
-      for (let startSample = 0, chunkIndex = 0; startSample < decoded.pcm.length; startSample += step, chunkIndex++) {
-        const endSample = Math.min(decoded.pcm.length, startSample + chunkLength)
-        const chunk = pcmToWav(decoded.pcm.slice(startSample, endSample))
+      const chunkResults: Array<{ offsetSeconds: number; words: CloudResult["words"] }> = []
+      const ranges = buildOverlappingChunkRanges(decoded.pcm.length, TARGET_RATE)
+      for (const range of ranges) {
+        const chunk = pcmToWav(decoded.pcm.slice(range.startSample, range.endSample))
         try {
-          const result = await cloudTranscribeWithRetry(chunk, `chunk-${chunkIndex + 1}.wav`)
+          const result = await retryOnce(() => cloudTranscribe(chunk, `chunk-${range.index + 1}.wav`))
           if (!result.words.length && result.transcript) throw new Error("Groq did not return word timestamps for a long-recording chunk.")
-          const offset = startSample / TARGET_RATE
-          for (const word of result.words) {
-            if (chunkIndex > 0 && word.start < OVERLAP_SECONDS * 0.8) continue
-            merged.push({ word: word.word, start: word.start + offset, end: word.end + offset })
-          }
+          chunkResults.push({ offsetSeconds: range.offsetSeconds, words: result.words })
         } catch (error) {
-          return { transcript: "", confidence: 0, errorCode: "network", errorMessage: `Chunk ${chunkIndex + 1} could not be transcribed after retry: ${error instanceof Error ? error.message : String(error)}`, audioBlob: blob, audioDurationSeconds: decoded.duration, partial: true }
+          return { transcript: "", confidence: 0, errorCode: "network", errorMessage: `Chunk ${range.index + 1} could not be transcribed after retry: ${error instanceof Error ? error.message : String(error)}`, audioBlob: blob, audioDurationSeconds: decoded.duration, partial: true }
         }
-        if (endSample >= decoded.pcm.length) break
       }
+      const merged = mergeTimestampedWordChunks(chunkResults)
       const transcript = merged.map((word) => word.word).join(" ").replace(/\s+([.,!?;:])/g, "$1").trim()
       return { transcript: transcript.toLowerCase(), confidence: transcript ? 0.95 : 0, wordTimings: merged, audioDurationSeconds: decoded.duration, audioBlob: blob, partial: false, ...(transcript ? {} : { errorCode: "no-speech" as const, errorMessage: "No speech detected." }) }
     }

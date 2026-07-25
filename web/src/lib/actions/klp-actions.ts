@@ -1,6 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { db, sqlite } from '@/lib/db';
+import { db, pool } from '@/lib/db';
 import {
   appSettings,
   attemptKlpResults,
@@ -31,8 +31,9 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function parseJson<T>(value: string | null | undefined, fallback: T): T {
+function parseJson<T>(value: unknown, fallback: T): T {
   if (!value) return fallback;
+  if (typeof value !== 'string') return value as T;
   try {
     return JSON.parse(value) as T;
   } catch {
@@ -63,22 +64,22 @@ function vocabularyTerms(row: { subtype?: string | null; baseItem?: string | nul
   return terms;
 }
 
-export function isKlpEnabled() {
-  const setting = db.select().from(appSettings).where(eq(appSettings.key, KLP_FEATURE_FLAG)).get();
+export async function isKlpEnabled() {
+  const setting = ((await db.select().from(appSettings).where(eq(appSettings.key, KLP_FEATURE_FLAG)).limit(1))[0]);
   return setting?.value === 'true';
 }
 
-export function setKlpEnabled(enabled: boolean) {
-  const existing = db.select().from(appSettings).where(eq(appSettings.key, KLP_FEATURE_FLAG)).get();
-  if (existing) db.update(appSettings).set({ value: enabled ? 'true' : 'false' }).where(eq(appSettings.key, KLP_FEATURE_FLAG)).run();
-  else db.insert(appSettings).values({ key: KLP_FEATURE_FLAG, value: enabled ? 'true' : 'false' }).run();
+export async function setKlpEnabled(enabled: boolean) {
+  const existing = ((await db.select().from(appSettings).where(eq(appSettings.key, KLP_FEATURE_FLAG)).limit(1))[0]);
+  if (existing) (await db.update(appSettings).set({ value: enabled ? 'true' : 'false' }).where(eq(appSettings.key, KLP_FEATURE_FLAG)));
+  else (await db.insert(appSettings).values({ key: KLP_FEATURE_FLAG, value: enabled ? 'true' : 'false' }));
 }
 
 export function validateKlpWorkbook(buffer: Buffer) {
   return parseAlcKlpWorkbook(buffer);
 }
 
-export function importKlpWorkbook(data: {
+export async function importKlpWorkbook(data: {
   buffer: Buffer;
   fileName?: string;
   name?: string;
@@ -86,7 +87,7 @@ export function importKlpWorkbook(data: {
 }) {
   const parsed = parseAlcKlpWorkbook(data.buffer);
   const importedAt = nowIso();
-  const source = db
+  const source = ((await db
     .insert(klpImportSources)
     .values({
       name: data.name?.trim() || 'ALC Index',
@@ -98,8 +99,7 @@ export function importKlpWorkbook(data: {
       warningsJson: JSON.stringify(parsed.warnings),
       status: 'imported',
     })
-    .returning()
-    .get();
+    .returning())[0]);
 
   const conceptRows = parsed.concepts.map((concept) => ({
     sourceId: source.id,
@@ -127,7 +127,7 @@ export function importKlpWorkbook(data: {
     createdAt: importedAt,
   }));
 
-  for (const part of chunk(conceptRows, 250)) db.insert(klpConcepts).values(part).run();
+  for (const part of chunk(conceptRows, 250)) (await db.insert(klpConcepts).values(part));
 
   const questionRows = parsed.activeQuestionShapes.map((question) => ({
     sourceId: source.id,
@@ -137,10 +137,10 @@ export function importKlpWorkbook(data: {
     modality: question.modality || null,
     rawJson: JSON.stringify(question.raw),
   }));
-  for (const part of chunk(questionRows, 300)) db.insert(klpActiveQuestionShapes).values(part).run();
+  for (const part of chunk(questionRows, 300)) (await db.insert(klpActiveQuestionShapes).values(part));
 
-  const linkedTaskCount = autoLinkVocabularyTasksToKlp(source.id);
-  setKlpEnabled(true);
+  const linkedTaskCount = await autoLinkVocabularyTasksToKlp(source.id);
+  await setKlpEnabled(true);
 
   return {
     source,
@@ -150,13 +150,13 @@ export function importKlpWorkbook(data: {
   };
 }
 
-export function autoLinkVocabularyTasksToKlp(sourceId?: number) {
+export async function autoLinkVocabularyTasksToKlp(sourceId?: number) {
   const latestSource = sourceId
-    ? db.select().from(klpImportSources).where(eq(klpImportSources.id, sourceId)).get()
-    : getLatestKlpSource();
+    ? ((await db.select().from(klpImportSources).where(eq(klpImportSources.id, sourceId)).limit(1))[0])
+    : await getLatestKlpSource();
   if (!latestSource) return 0;
 
-  const concepts = db
+  const concepts = (await db
     .select({
       id: klpConcepts.id,
       subtype: klpConcepts.subtype,
@@ -168,8 +168,7 @@ export function autoLinkVocabularyTasksToKlp(sourceId?: number) {
       eq(klpConcepts.sourceId, latestSource.id),
       eq(klpConcepts.domain, 'Vocabulary'),
       eq(klpConcepts.supportStatus, 'speaking_scored'),
-    ))
-    .all();
+    )));
 
   const termToConcept = new Map<string, number>();
   for (const concept of concepts) {
@@ -178,63 +177,60 @@ export function autoLinkVocabularyTasksToKlp(sourceId?: number) {
     }
   }
 
-  const tasks = db
+  const tasks = (await db
     .select({
       taskId: practiceTasks.id,
       word: vocabularyItems.word,
     })
     .from(practiceTasks)
-    .innerJoin(vocabularyItems, eq(vocabularyItems.id, practiceTasks.vocabularyItemId))
-    .all();
+    .innerJoin(vocabularyItems, eq(vocabularyItems.id, practiceTasks.vocabularyItemId)));
 
   let linked = 0;
   for (const task of tasks) {
     const conceptId = termToConcept.get(normalizeTerm(task.word));
     if (!conceptId) continue;
-    const existing = db
+    const existing = ((await db
       .select()
       .from(practiceTaskKlps)
-      .where(and(eq(practiceTaskKlps.practiceTaskId, task.taskId), eq(practiceTaskKlps.klpConceptId, conceptId)))
-      .get();
+      .where(and(eq(practiceTaskKlps.practiceTaskId, task.taskId), eq(practiceTaskKlps.klpConceptId, conceptId))).limit(1))[0]);
     if (existing) continue;
-    db.insert(practiceTaskKlps)
+    (await db.insert(practiceTaskKlps)
       .values({
         practiceTaskId: task.taskId,
         klpConceptId: conceptId,
         assessmentMode: 'speaking_performance',
         createdAt: nowIso(),
-      })
-      .run();
+      }));
     linked += 1;
   }
   return linked;
 }
 
-export function getLatestKlpSource() {
-  return db.select().from(klpImportSources).orderBy(klpImportSources.id).all().at(-1) ?? null;
+export async function getLatestKlpSource() {
+  return (await db.select().from(klpImportSources).orderBy(klpImportSources.id)).at(-1) ?? null;
 }
 
-export function getKlpOverview() {
-  const latest = getLatestKlpSource();
-  const enabled = isKlpEnabled();
-  const conceptCounts = sqlite.prepare(`
-    SELECT domain, support_status AS supportStatus, COUNT(*) AS count
+export async function getKlpOverview() {
+  const latest = await getLatestKlpSource();
+  const enabled = await isKlpEnabled();
+  const conceptCounts = (await pool.query<{ domain: string; supportStatus: string; count: number }>(`
+    SELECT domain, support_status AS "supportStatus", COUNT(*)::int AS count
     FROM klp_concepts
-    ${latest ? 'WHERE source_id = ?' : ''}
+    ${latest ? 'WHERE source_id = $1' : ''}
     GROUP BY domain, support_status
-  `).all(...(latest ? [latest.id] : [])) as Array<{ domain: string; supportStatus: string; count: number }>;
-  const totals = sqlite.prepare(`
+  `, latest ? [latest.id] : [])).rows;
+  const totals = (await pool.query<Row>(`
     SELECT
-      (SELECT COUNT(*) FROM klp_concepts ${latest ? 'WHERE source_id = ?' : ''}) AS totalConcepts,
-      (SELECT COUNT(*) FROM klp_active_question_shapes ${latest ? 'WHERE source_id = ?' : ''}) AS activeQuestionShapes,
-      (SELECT COUNT(DISTINCT klp_concept_id) FROM attempt_klp_results) AS practicedConcepts,
-      (SELECT COUNT(*) FROM attempt_klp_results) AS resultEvents,
-      (SELECT COUNT(*) FROM klp_generated_scenarios) AS generatedScenarios,
-      (SELECT COUNT(*) FROM klp_generated_scenarios WHERE status = 'published') AS publishedScenarios,
-      (SELECT COUNT(*) FROM practice_task_klps) AS linkedPracticeTasks,
-      (SELECT COUNT(*) FROM homework_assignments WHERE source = 'klp' AND status != 'archived') AS assignedStudyPlans,
-      (SELECT COUNT(*) FROM homework_assignments WHERE source = 'klp' AND scenario_ids_json != '[]' AND status != 'archived') AS assignedScenarioPlans
-  `).get(...(latest ? [latest.id, latest.id] : [])) as Row;
+      (SELECT COUNT(*)::int FROM klp_concepts ${latest ? 'WHERE source_id = $1' : ''}) AS "totalConcepts",
+      (SELECT COUNT(*)::int FROM klp_active_question_shapes ${latest ? 'WHERE source_id = $1' : ''}) AS "activeQuestionShapes",
+      (SELECT COUNT(DISTINCT klp_concept_id)::int FROM attempt_klp_results) AS "practicedConcepts",
+      (SELECT COUNT(*)::int FROM attempt_klp_results) AS "resultEvents",
+      (SELECT COUNT(*)::int FROM klp_generated_scenarios) AS "generatedScenarios",
+      (SELECT COUNT(*)::int FROM klp_generated_scenarios WHERE status = 'published') AS "publishedScenarios",
+      (SELECT COUNT(*)::int FROM practice_task_klps) AS "linkedPracticeTasks",
+      (SELECT COUNT(*)::int FROM homework_assignments WHERE source = 'klp' AND status != 'archived') AS "assignedStudyPlans",
+      (SELECT COUNT(*)::int FROM homework_assignments WHERE source = 'klp' AND jsonb_array_length(scenario_ids_json) > 0 AND status != 'archived') AS "assignedScenarioPlans"
+  `, latest ? [latest.id] : [])).rows[0] ?? {};
   const warnings = parseJson<string[]>(latest?.warningsJson, []);
   const byDomain: Record<string, number> = {};
   const bySupportStatus: Record<string, number> = {};
@@ -252,7 +248,7 @@ export function getKlpOverview() {
   };
 }
 
-export function listKlpConcepts(filters: {
+export async function listKlpConcepts(filters: {
   sourceId?: number | null;
   q?: string | null;
   book?: string | null;
@@ -264,31 +260,42 @@ export function listKlpConcepts(filters: {
 } = {}) {
   const where: string[] = [];
   const params: unknown[] = [];
-  const latest = filters.sourceId ? null : getLatestKlpSource();
+  const addParam = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const latest = filters.sourceId ? null : await getLatestKlpSource();
   if (filters.sourceId || latest) {
-    where.push('source_id = ?');
-    params.push(filters.sourceId ?? latest?.id);
+    where.push(`source_id = ${addParam(filters.sourceId ?? latest?.id)}`);
   }
   if (filters.q) {
-    where.push('(concept_id LIKE ? OR base_item LIKE ? OR subtype LIKE ? OR definition LIKE ?)');
     const value = `%${filters.q}%`;
-    params.push(value, value, value, value);
+    const parameter = addParam(value);
+    where.push(`(concept_id ILIKE ${parameter} OR base_item ILIKE ${parameter} OR subtype ILIKE ${parameter} OR definition ILIKE ${parameter})`);
   }
-  if (filters.book) { where.push('book = ?'); params.push(filters.book); }
-  if (filters.lesson) { where.push('lesson = ?'); params.push(filters.lesson); }
-  if (filters.domain) { where.push('domain = ?'); params.push(filters.domain); }
-  if (filters.supportStatus) { where.push('support_status = ?'); params.push(filters.supportStatus); }
+  if (filters.book) where.push(`book = ${addParam(filters.book)}`);
+  if (filters.lesson) where.push(`lesson = ${addParam(filters.lesson)}`);
+  if (filters.domain) where.push(`domain = ${addParam(filters.domain)}`);
+  if (filters.supportStatus) where.push(`support_status = ${addParam(filters.supportStatus)}`);
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const limit = Math.max(1, Math.min(200, filters.limit ?? 50));
   const offset = Math.max(0, filters.offset ?? 0);
-  const rows = sqlite.prepare(`
+  const limitParam = addParam(limit);
+  const offsetParam = addParam(offset);
+  const rows = (await pool.query<Row>(`
     SELECT * FROM klp_concepts
     ${whereSql}
-    ORDER BY CAST(book AS INTEGER), CAST(lesson AS INTEGER), domain, concept_number, subdivision
-    LIMIT ? OFFSET ?
-  `).all(...params, limit, offset) as Row[];
-  const count = sqlite.prepare(`SELECT COUNT(*) AS count FROM klp_concepts ${whereSql}`).get(...params) as { count: number };
-  return { rows: rows.map(normalizeConceptRow), count: count.count, limit, offset };
+    ORDER BY NULLIF(regexp_replace(book, '\\D', '', 'g'), '')::integer NULLS LAST,
+      NULLIF(regexp_replace(lesson, '\\D', '', 'g'), '')::integer NULLS LAST,
+      domain, concept_number, subdivision
+    LIMIT ${limitParam} OFFSET ${offsetParam}
+  `, params)).rows;
+  const countParams = params.slice(0, -2);
+  const count = (await pool.query<{ count: number }>(
+    `SELECT COUNT(*)::int AS count FROM klp_concepts ${whereSql}`,
+    countParams,
+  )).rows[0];
+  return { rows: rows.map(normalizeConceptRow), count: Number(count?.count ?? 0), limit, offset };
 }
 
 function normalizeConceptRow(row: Row) {
@@ -314,16 +321,16 @@ function normalizeConceptRow(row: Row) {
   };
 }
 
-function getConceptsByIds(ids: number[]) {
+async function getConceptsByIds(ids: number[]) {
   if (ids.length === 0) return [];
-  return db.select().from(klpConcepts).where(inArray(klpConcepts.id, ids)).all();
+  return (await db.select().from(klpConcepts).where(inArray(klpConcepts.id, ids)));
 }
 
 function normalizeProgressionMode(value: unknown): Scenario['progressionMode'] {
   return value === 'controlled' || value === 'open' || value === 'simulation' ? value : 'guided';
 }
 
-function scenarioPromptFromConcepts(concepts: ReturnType<typeof getConceptsByIds>, cefrLevel: string, progressionMode: Scenario['progressionMode']) {
+function scenarioPromptFromConcepts(concepts: Awaited<ReturnType<typeof getConceptsByIds>>, cefrLevel: string, progressionMode: Scenario['progressionMode']) {
   const compact = concepts.map((concept) => ({
     id: concept.id,
     conceptId: concept.conceptId,
@@ -345,7 +352,7 @@ function scenarioPromptFromConcepts(concepts: ReturnType<typeof getConceptsByIds
   ].join('\n');
 }
 
-function fallbackScenario(concepts: ReturnType<typeof getConceptsByIds>, cefrLevel: string) {
+function fallbackScenario(concepts: Awaited<ReturnType<typeof getConceptsByIds>>, cefrLevel: string) {
   const first = concepts[0];
   const label = first?.subtype || first?.baseItem || first?.definition || 'lesson language';
   const targetVocabulary = concepts
@@ -371,7 +378,7 @@ function fallbackScenario(concepts: ReturnType<typeof getConceptsByIds>, cefrLev
   };
 }
 
-function parseScenarioJson(text: string, concepts: ReturnType<typeof getConceptsByIds>, cefrLevel: string) {
+function parseScenarioJson(text: string, concepts: Awaited<ReturnType<typeof getConceptsByIds>>, cefrLevel: string) {
   try {
     const match = text.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(match ? match[0] : text);
@@ -399,7 +406,7 @@ export async function generateKlpScenario(data: {
   maxTurns?: number;
   createdByUserId?: number;
 }) {
-  const concepts = getConceptsByIds(data.klpIds);
+  const concepts = await getConceptsByIds(data.klpIds);
   if (concepts.length === 0) throw new Error('Select at least one valid KLP.');
   const progressionMode = normalizeProgressionMode(data.progressionMode);
   let draft: ReturnType<typeof fallbackScenario>;
@@ -417,7 +424,7 @@ export async function generateKlpScenario(data: {
   const scenarioId = `klp-${nanoid(10)}`;
   const tutorRules = 'Stay in character. Keep each reply to 1-2 short sentences. Ask one question at a time. Stay focused on the student goal and target lesson language. If the student asks for unrelated, unsafe, or adult content, briefly redirect them back to the lesson. Never write Arabic. This is speaking-performance practice, not grammar mastery scoring.';
   const systemPrompt = `You are ${draft.aiRole}. The student goal is: ${draft.studentGoal}. ${tutorRules}`;
-  const row = db.insert(klpGeneratedScenarios).values({
+  const row = ((await db.insert(klpGeneratedScenarios).values({
     scenarioId,
     title: draft.title,
     description: draft.description,
@@ -438,23 +445,23 @@ export async function generateKlpScenario(data: {
     createdAt,
     updatedAt: createdAt,
     klpIdsJson: JSON.stringify(concepts.map((concept) => concept.id)),
-  }).returning().get();
+  }).returning())[0]);
 
   for (const concept of concepts) {
-    db.insert(scenarioKlps).values({
+    (await db.insert(scenarioKlps).values({
       scenarioId,
       klpConceptId: concept.id,
       assessmentMode: concept.supportStatus === 'prompt_context_only' ? 'context_only' : 'speaking_performance',
       createdAt,
-    }).run();
+    }));
   }
   return row;
 }
 
-export function listGeneratedScenarios(includeDrafts = false) {
+export async function listGeneratedScenarios(includeDrafts = false) {
   const rows = includeDrafts
-    ? db.select().from(klpGeneratedScenarios).all()
-    : db.select().from(klpGeneratedScenarios).where(eq(klpGeneratedScenarios.status, 'published')).all();
+    ? (await db.select().from(klpGeneratedScenarios))
+    : (await db.select().from(klpGeneratedScenarios).where(eq(klpGeneratedScenarios.status, 'published')));
   return rows.sort((a, b) => b.id - a.id).map((row) => ({
     ...row,
     successCriteria: parseJson<string[]>(row.successCriteriaJson, []),
@@ -463,28 +470,27 @@ export function listGeneratedScenarios(includeDrafts = false) {
   }));
 }
 
-export function publishGeneratedScenario(id: number, publish: boolean) {
+export async function publishGeneratedScenario(id: number, publish: boolean) {
   const updatedAt = nowIso();
-  const row = db.update(klpGeneratedScenarios).set({
+  const row = ((await db.update(klpGeneratedScenarios).set({
     status: publish ? 'published' : 'draft',
     updatedAt,
     publishedAt: publish ? updatedAt : null,
-  }).where(eq(klpGeneratedScenarios.id, id)).returning().get();
+  }).where(eq(klpGeneratedScenarios.id, id)).returning())[0]);
   return row;
 }
 
-export function updateGeneratedScenarioMaxTurns(id: number, requestedMaxTurns: number) {
-  const scenario = db.select().from(klpGeneratedScenarios).where(eq(klpGeneratedScenarios.id, id)).get();
+export async function updateGeneratedScenarioMaxTurns(id: number, requestedMaxTurns: number) {
+  const scenario = ((await db.select().from(klpGeneratedScenarios).where(eq(klpGeneratedScenarios.id, id)).limit(1))[0]);
   if (!scenario) throw new Error('Scenario not found.');
   const maxTurns = Math.max(scenario.minTurns, Math.min(12, Math.round(requestedMaxTurns)));
-  return db.update(klpGeneratedScenarios)
+  return ((await db.update(klpGeneratedScenarios)
     .set({ maxTurns, updatedAt: nowIso() })
     .where(eq(klpGeneratedScenarios.id, id))
-    .returning()
-    .get();
+    .returning())[0]);
 }
 
-export function generatedScenarioAsScenario(row: ReturnType<typeof listGeneratedScenarios>[number]): Scenario {
+export function generatedScenarioAsScenario(row: Awaited<ReturnType<typeof listGeneratedScenarios>>[number]): Scenario {
   return {
     id: row.scenarioId,
     title: row.title,
@@ -503,8 +509,8 @@ export function generatedScenarioAsScenario(row: ReturnType<typeof listGenerated
   };
 }
 
-export function getGeneratedScenario(scenarioId: string): Scenario | null {
-  const row = db.select().from(klpGeneratedScenarios).where(eq(klpGeneratedScenarios.scenarioId, scenarioId)).get();
+export async function getGeneratedScenario(scenarioId: string): Promise<Scenario | null> {
+  const row = ((await db.select().from(klpGeneratedScenarios).where(eq(klpGeneratedScenarios.scenarioId, scenarioId)).limit(1))[0]);
   if (!row || row.status !== 'published') return null;
   return generatedScenarioAsScenario({
     ...row,
@@ -514,7 +520,7 @@ export function getGeneratedScenario(scenarioId: string): Scenario | null {
   });
 }
 
-export function recordAttemptKlpResults(data: {
+export async function recordAttemptKlpResults(data: {
   attemptId: number;
   studentId: number;
   practiceTaskId: number;
@@ -529,7 +535,7 @@ export function recordAttemptKlpResults(data: {
   passScore?: number;
   evidenceKind?: Extract<XapiEvidenceKind, 'answered' | 'reviewed'>;
 }) {
-  const links = db
+  const links = (await db
     .select({
       klpConceptId: practiceTaskKlps.klpConceptId,
       assessmentMode: practiceTaskKlps.assessmentMode,
@@ -537,15 +543,14 @@ export function recordAttemptKlpResults(data: {
     })
     .from(practiceTaskKlps)
     .innerJoin(klpConcepts, eq(klpConcepts.id, practiceTaskKlps.klpConceptId))
-    .where(eq(practiceTaskKlps.practiceTaskId, data.practiceTaskId))
-    .all();
+    .where(eq(practiceTaskKlps.practiceTaskId, data.practiceTaskId)));
   const createdAt = nowIso();
   const out = [];
   for (const link of links) {
     const assessed = link.supportStatus === 'speaking_scored' && link.assessmentMode !== 'context_only';
     const passed = assessed && data.scores.composite >= (data.passScore ?? 0.75);
     const scorePercent = assessed ? Math.round(Math.max(0, Math.min(1, data.scores.composite)) * 100) : 0;
-    const result = db.insert(attemptKlpResults).values({
+    const result = ((await db.insert(attemptKlpResults).values({
       attemptId: data.attemptId,
       scenarioAttemptId: null,
       studentId: data.studentId,
@@ -558,22 +563,22 @@ export function recordAttemptKlpResults(data: {
       confidence: assessed ? 1 : 0,
       rawScoresJson: JSON.stringify(data.scores),
       createdAt,
-    }).returning().get();
-    upsertStudentKlpSummary(data.studentId, link.klpConceptId, scorePercent, passed, createdAt);
-    enqueueXapiForKlpResult(result.id, data.evidenceKind ?? 'answered');
+    }).returning())[0]);
+    await upsertStudentKlpSummary(data.studentId, link.klpConceptId, scorePercent, passed, createdAt);
+    await enqueueXapiForKlpResult(result.id, data.evidenceKind ?? 'answered');
     out.push(result);
   }
   return out;
 }
 
-export function recordScenarioKlpResults(data: {
+export async function recordScenarioKlpResults(data: {
   scenarioAttemptId: number;
   scenarioId: string;
   studentId: number;
   score: number;
   criteriaMet: boolean[];
 }) {
-  const links = db
+  const links = (await db
     .select({
       klpConceptId: scenarioKlps.klpConceptId,
       assessmentMode: scenarioKlps.assessmentMode,
@@ -581,15 +586,14 @@ export function recordScenarioKlpResults(data: {
     })
     .from(scenarioKlps)
     .innerJoin(klpConcepts, eq(klpConcepts.id, scenarioKlps.klpConceptId))
-    .where(eq(scenarioKlps.scenarioId, data.scenarioId))
-    .all();
+    .where(eq(scenarioKlps.scenarioId, data.scenarioId)));
   const createdAt = nowIso();
   const out = [];
   for (const link of links) {
     const assessed = link.supportStatus === 'speaking_scored' && link.assessmentMode !== 'context_only';
     const passed = assessed && data.score >= 75;
     const scorePercent = assessed ? Math.round(Math.max(0, Math.min(100, data.score))) : 0;
-    const result = db.insert(attemptKlpResults).values({
+    const result = ((await db.insert(attemptKlpResults).values({
       attemptId: null,
       scenarioAttemptId: data.scenarioAttemptId,
       studentId: data.studentId,
@@ -602,80 +606,70 @@ export function recordScenarioKlpResults(data: {
       confidence: assessed ? 0.85 : 0,
       rawScoresJson: JSON.stringify({ scenarioScore: data.score, criteriaMet: data.criteriaMet }),
       createdAt,
-    }).returning().get();
-    upsertStudentKlpSummary(data.studentId, link.klpConceptId, scorePercent, passed, createdAt);
-    enqueueXapiForKlpResult(result.id, 'practiced');
+    }).returning())[0]);
+    await upsertStudentKlpSummary(data.studentId, link.klpConceptId, scorePercent, passed, createdAt);
+    await enqueueXapiForKlpResult(result.id, 'practiced');
     out.push(result);
   }
   return out;
 }
 
-function upsertStudentKlpSummary(studentId: number, klpConceptId: number, scorePercent: number, passed: boolean, timestamp: string) {
-  const existing = db
-    .select()
-    .from(studentKlpSummaries)
-    .where(and(eq(studentKlpSummaries.studentId, studentId), eq(studentKlpSummaries.klpConceptId, klpConceptId)))
-    .get();
-  if (existing) {
-    db.update(studentKlpSummaries).set({
-      attempts: existing.attempts + 1,
-      successes: existing.successes + (passed ? 1 : 0),
-      latestScorePercent: scorePercent,
-      lastPracticedAt: timestamp,
-    }).where(eq(studentKlpSummaries.id, existing.id)).run();
-  } else {
-    db.insert(studentKlpSummaries).values({
-      studentId,
-      klpConceptId,
-      attempts: 1,
-      successes: passed ? 1 : 0,
-      latestScorePercent: scorePercent,
-      lastPracticedAt: timestamp,
-    }).run();
-  }
+async function upsertStudentKlpSummary(studentId: number, klpConceptId: number, scorePercent: number, passed: boolean, timestamp: string) {
+  await pool.query(`
+    INSERT INTO student_klp_summaries(
+      student_id, klp_concept_id, attempts, successes, latest_score_percent, last_practiced_at
+    ) VALUES ($1, $2, 1, $3, $4, $5)
+    ON CONFLICT(student_id, klp_concept_id) DO UPDATE SET
+      attempts = student_klp_summaries.attempts + 1,
+      successes = student_klp_summaries.successes + excluded.successes,
+      latest_score_percent = excluded.latest_score_percent,
+      last_practiced_at = excluded.last_practiced_at
+  `, [studentId, klpConceptId, passed ? 1 : 0, scorePercent, timestamp]);
 }
 
-export function getKlpResults(filters: { studentId?: number; limit?: number } = {}) {
+export async function getKlpResults(filters: { studentId?: number; limit?: number } = {}) {
   const params: unknown[] = [];
   const where: string[] = [];
   if (filters.studentId) {
-    where.push('akr.student_id = ?');
+    where.push('akr.student_id = $1');
     params.push(filters.studentId);
   }
   const limit = Math.max(1, Math.min(500, filters.limit ?? 100));
-  const rows = sqlite.prepare(`
+  const limitParameter = `$${params.length + 1}`;
+  params.push(limit);
+  const rows = (await pool.query<Row>(`
     SELECT
-      akr.id AS eventId,
+      akr.id AS "eventId",
       akr.created_at AS timestamp,
-      akr.attempt_id AS attemptId,
-      akr.scenario_attempt_id AS scenarioAttemptId,
-      sa.scenario_id AS scenarioId,
-      akr.student_id AS studentId,
-      s.unique_number AS studentNumber,
-      s.full_name AS studentName,
-      kc.id AS klpId,
-      kc.concept_id AS conceptId,
+      akr.attempt_id AS "attemptId",
+      akr.scenario_attempt_id AS "scenarioAttemptId",
+      sa.scenario_id AS "scenarioId",
+      akr.student_id AS "studentId",
+      s.unique_number AS "studentNumber",
+      s.full_name AS "studentName",
+      kc.id AS "klpId",
+      kc.concept_id AS "conceptId",
       kc.book,
       kc.lesson,
       kc.domain,
-      kc.base_item AS baseItem,
+      kc.base_item AS "baseItem",
       kc.subtype,
-      kc.support_status AS supportStatus,
-      akr.assessment_mode AS assessmentMode,
+      kc.support_status AS "supportStatus",
+      akr.assessment_mode AS "assessmentMode",
       akr.assessed,
-      akr.success_score_percent AS successScorePercent,
+      akr.success_score_percent AS "successScorePercent",
       akr.passed,
       akr.confidence,
-      akr.raw_scores_json AS rawScoresJson
+      akr.raw_scores_json AS "rawScoresJson"
     FROM attempt_klp_results akr
     INNER JOIN students s ON s.id = akr.student_id
     INNER JOIN klp_concepts kc ON kc.id = akr.klp_concept_id
     LEFT JOIN scenario_attempts sa ON sa.id = akr.scenario_attempt_id
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY akr.created_at DESC
-    LIMIT ?
-  `).all(...params, limit) as Row[];
-  return rows.map((row) => ({
+    LIMIT ${limitParameter}
+  `, params)).rows;
+  return Promise.all(rows.map(async (row) => ({
     eventId: Number(row.eventId),
     timestamp: String(row.timestamp),
     attemptId: row.attemptId === null ? null : Number(row.attemptId),
@@ -702,7 +696,7 @@ export function getKlpResults(filters: { studentId?: number; limit?: number } = 
     passed: Boolean(row.passed),
     confidence: Number(row.confidence),
     scores: parseJson(row.rawScoresJson as string, {}),
-    assignments: getKlpAssignmentsForStudent(Number(row.studentId))
+    assignments: (await getKlpAssignmentsForStudent(Number(row.studentId)))
       .filter((assignment) =>
         assignment.klpIds.includes(Number(row.klpId)) ||
         (!!row.scenarioId && assignment.scenarioIds.includes(String(row.scenarioId))),
@@ -718,13 +712,15 @@ export function getKlpResults(filters: { studentId?: number; limit?: number } = 
         taskTypes: assignment.taskTypes,
         scenarioIds: assignment.scenarioIds,
       })),
-  }));
+  })));
 }
 
-export function getKlpCatalogExport() {
-  const rows = sqlite.prepare(`
+export async function getKlpCatalogExport() {
+  const rows = (await pool.query<Row>(`
     SELECT * FROM klp_concepts
-    ORDER BY CAST(book AS INTEGER), CAST(lesson AS INTEGER), domain, concept_number, subdivision
-  `).all() as Row[];
+    ORDER BY NULLIF(regexp_replace(book, '\\D', '', 'g'), '')::integer NULLS LAST,
+      NULLIF(regexp_replace(lesson, '\\D', '', 'g'), '')::integer NULLS LAST,
+      domain, concept_number, subdivision
+  `)).rows;
   return rows.map(normalizeConceptRow);
 }

@@ -11,7 +11,7 @@ export async function GET(request: Request) {
     const auth = await requireKlpUser();
     if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
     const url = new URL(request.url);
-    return Response.json(listKlpConcepts({
+    return Response.json(await listKlpConcepts({
       q: param(url, 'q'),
       book: param(url, 'book'),
       lesson: param(url, 'lesson'),

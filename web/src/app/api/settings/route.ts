@@ -2,6 +2,8 @@ import { cookies } from 'next/headers';
 import { getSessionFromToken } from '@/lib/actions/auth-actions';
 import { getAppSettings, updateAppSetting } from '@/lib/actions/admin-actions';
 import { API_KEY_KEYS, API_KEY_MASK } from '@/lib/ai/providers';
+import { getSecretStore } from '@/lib/secrets/secret-store';
+import { isSecretLikeSettingKey } from '@/lib/secrets/sensitive-setting';
 
 /**
  * Sensitive settings (API keys, etc.) that should never be sent back to the
@@ -24,7 +26,7 @@ export async function GET() {
     const user = await getSessionFromToken(token);
     if (!user) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
 
-    const settings = getAppSettings();
+    const settings = await getAppSettings();
 
     // Non-admins never even see the existence of API keys
     const isAdmin = user.role === 'Admin';
@@ -32,10 +34,18 @@ export async function GET() {
     const settingsObj: Record<string, string> = {};
     const filteredSettings: typeof settings = [];
     for (const s of settings) {
-      if (SENSITIVE_KEYS.has(s.key) && !isAdmin) continue;
+      if (isSecretLikeSettingKey(s.key)) continue;
       const v = redact(s.value, s.key);
       settingsObj[s.key] = v;
       filteredSettings.push({ ...s, value: v });
+    }
+    if (isAdmin) {
+      const secretStore = getSecretStore();
+      for (const key of SENSITIVE_KEYS) {
+        const value = await secretStore.configured(key) ? API_KEY_MASK : '';
+        settingsObj[key] = value;
+        filteredSettings.push({ key, value });
+      }
     }
     return Response.json({ settings: filteredSettings, ...settingsObj });
   } catch {
@@ -57,6 +67,12 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     if (body.key && body.value !== undefined) {
+      if (isSecretLikeSettingKey(body.key) && !SENSITIVE_KEYS.has(body.key)) {
+        return Response.json(
+          { error: 'Secret-like settings must use an approved encrypted secret field.' },
+          { status: 400 },
+        );
+      }
       if (SENSITIVE_KEYS.has(body.key) && !isAdmin) {
         return Response.json({ error: 'Only admins can change API keys.' }, { status: 403 });
       }
@@ -64,13 +80,35 @@ export async function POST(request: Request) {
       if (SENSITIVE_KEYS.has(body.key) && String(body.value) === API_KEY_MASK) {
         return Response.json({ success: true, noop: true });
       }
-      updateAppSetting(body.key, String(body.value));
+      if (SENSITIVE_KEYS.has(body.key)) {
+        const value = String(body.value).trim();
+        if (value) await getSecretStore().set(body.key, value);
+        else await getSecretStore().clear(body.key);
+      } else {
+        await updateAppSetting(body.key, String(body.value));
+      }
     } else {
-      for (const [key, value] of Object.entries(body)) {
-        if (key === 'key' || key === 'value') continue;
-        if (SENSITIVE_KEYS.has(key) && !isAdmin) continue; // silently skip
+      const entries = Object.entries(body).filter(([key]) => key !== 'key' && key !== 'value');
+      for (const [key] of entries) {
+        if (SENSITIVE_KEYS.has(key) && !isAdmin) {
+          return Response.json({ error: 'Only admins can change API keys.' }, { status: 403 });
+        }
+        if (isSecretLikeSettingKey(key) && !SENSITIVE_KEYS.has(key)) {
+          return Response.json(
+            { error: 'Secret-like settings must use an approved encrypted secret field.' },
+            { status: 400 },
+          );
+        }
+      }
+      for (const [key, value] of entries) {
         if (SENSITIVE_KEYS.has(key) && String(value) === API_KEY_MASK) continue; // skip mask
-        updateAppSetting(key, String(value));
+        if (SENSITIVE_KEYS.has(key)) {
+          const secret = String(value).trim();
+          if (secret) await getSecretStore().set(key, secret);
+          else await getSecretStore().clear(key);
+        } else {
+          await updateAppSetting(key, String(value));
+        }
       }
     }
 

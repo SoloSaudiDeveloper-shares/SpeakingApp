@@ -624,11 +624,22 @@ export default function PracticePage() {
       setFeedback(finalFeedback)
 
       if (data?.cycle && data?.book && currentTask) {
+        let audioPath: string | undefined
+        if (recordingBlob) {
+          const form = new FormData()
+          form.append("audio", recordingBlob, `attempt.${recordingBlob.type.includes("wav") ? "wav" : "webm"}`)
+          const upload = await fetch("/api/audio", { method: "POST", body: form })
+          if (upload.ok) {
+            const uploaded = await upload.json()
+            if (typeof uploaded?.key === "string") audioPath = uploaded.key
+          }
+        }
         const saveResponse = await fetch("/api/practice/attempt", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             cycleId: data.cycle.id, bookId: data.book.id,
             practiceTaskId: currentTask.id, rawTranscript: finalTranscript,
+            audioPath,
             targetMatchScore: finalScores.targetMatch,
             pronunciationScore: finalScores.pronunciation,
             fluencyScore: finalScores.fluency,

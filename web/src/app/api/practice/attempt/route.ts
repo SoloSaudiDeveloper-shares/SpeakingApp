@@ -140,39 +140,36 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Missing or invalid cycleId/practiceTaskId.' }, { status: 400 });
     }
 
-    const enrollment = db
+    const enrollment = ((await db
       .select()
       .from(studentCycles)
-      .where(and(eq(studentCycles.studentId, user.studentId), eq(studentCycles.cycleId, cycleId)))
-      .get();
+      .where(and(eq(studentCycles.studentId, user.studentId), eq(studentCycles.cycleId, cycleId))).limit(1))[0]);
     if (!enrollment) return Response.json({ error: 'Not enrolled in this cycle.' }, { status: 403 });
 
-    const student = db.select().from(students).where(eq(students.id, user.studentId)).get();
-    const cycle = db.select().from(cycles).where(eq(cycles.id, cycleId)).get();
+    const student = ((await db.select().from(students).where(eq(students.id, user.studentId)).limit(1))[0]);
+    const cycle = ((await db.select().from(cycles).where(eq(cycles.id, cycleId)).limit(1))[0]);
     if (!cycle) return Response.json({ error: 'Cycle not found.' }, { status: 404 });
 
-    const book = db.select().from(books).where(eq(books.id, cycle.bookId)).get();
-    const task = db
+    const book = ((await db.select().from(books).where(eq(books.id, cycle.bookId)).limit(1))[0]);
+    const task = ((await db
       .select()
       .from(practiceTasks)
-      .where(and(eq(practiceTasks.id, practiceTaskId), eq(practiceTasks.bookId, cycle.bookId)))
-      .get();
+      .where(and(eq(practiceTasks.id, practiceTaskId), eq(practiceTasks.bookId, cycle.bookId))).limit(1))[0]);
     if (!task) return Response.json({ error: 'Practice task not found for this cycle.' }, { status: 404 });
 
     const vocabulary = task.vocabularyItemId
-      ? db.select().from(vocabularyItems).where(eq(vocabularyItems.id, task.vocabularyItemId)).get()
+      ? ((await db.select().from(vocabularyItems).where(eq(vocabularyItems.id, task.vocabularyItemId)).limit(1))[0])
       : null;
 
     const mastery = task.vocabularyItemId
-      ? db
+      ? ((await db
           .select()
           .from(wordMasteryRecords)
           .where(and(
             eq(wordMasteryRecords.studentId, user.studentId),
             eq(wordMasteryRecords.vocabularyItemId, task.vocabularyItemId),
             eq(wordMasteryRecords.cycleId, cycleId),
-          ))
-          .get()
+          )).limit(1))[0])
       : null;
 
     const transcript = typeof body.rawTranscript === 'string' ? body.rawTranscript : '';
@@ -210,7 +207,7 @@ export async function POST(request: Request) {
         previousAttemptCount: mastery?.timesSpoken ?? 0,
       });
 
-      const result = recordAttempt({
+      const result = await recordAttempt({
         studentId: user.studentId,
         cycleId,
         bookId: cycle.bookId,
@@ -234,7 +231,7 @@ export async function POST(request: Request) {
           clientScoresIgnored: true,
         }),
       });
-      const klpResults = recordAttemptKlpResults({
+      const klpResults = await recordAttemptKlpResults({
         attemptId: result.id,
         studentId: user.studentId,
         practiceTaskId,
@@ -268,7 +265,7 @@ export async function POST(request: Request) {
     if (expectedList.length === 0 && vocabulary?.word) expectedList = [vocabulary.word];
     const feedback = generateFeedback(score, transcript, expectedList, durationSeconds);
 
-    const result = recordAttempt({
+    const result = await recordAttempt({
       studentId: user.studentId,
       cycleId,
       bookId: cycle.bookId,
@@ -289,7 +286,7 @@ export async function POST(request: Request) {
         clientScoresIgnored: true,
       }),
     });
-    const klpResults = recordAttemptKlpResults({
+    const klpResults = await recordAttemptKlpResults({
       attemptId: result.id,
       studentId: user.studentId,
       practiceTaskId,

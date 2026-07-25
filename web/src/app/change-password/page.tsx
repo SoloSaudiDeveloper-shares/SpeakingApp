@@ -27,8 +27,8 @@ export default function ChangePasswordPage() {
       return
     }
 
-    if (newPassword.length < 6) {
-      setError("Password must be at least 6 characters.")
+    if (newPassword.length < 12) {
+      setError("Password must be at least 12 characters.")
       return
     }
 
@@ -99,7 +99,7 @@ export default function ChangePasswordPage() {
               name="newPassword"
               type={showNew ? "text" : "password"}
               required
-              placeholder="Min. 6 characters"
+              placeholder="Min. 12 characters"
               className="w-full rounded-lg border border-input bg-background px-3 py-2.5 pr-10 text-sm text-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/25"
             />
             <button type="button" onClick={() => setShowNew((v) => !v)} tabIndex={-1} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">

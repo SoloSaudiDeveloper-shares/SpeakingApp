@@ -1,0 +1,194 @@
+name: PostgreSQL release gates
+
+on:
+  pull_request:
+  push:
+    branches: [main, codex/postgres-azure]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: speaking_lab
+          POSTGRES_USER: speaking
+          POSTGRES_PASSWORD: ci-postgres-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U speaking -d speaking_lab"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://speaking:ci-postgres-only@127.0.0.1:5432/speaking_lab
+      DATABASE_SSL_MODE: disable
+      SETTINGS_ENCRYPTION_KEY: ci-generated-nonproduction-encryption-key
+      ALLOW_LOCAL_ENCRYPTED_SECRET_STORE: 'true'
+      AZURE_STORAGE_CONNECTION_STRING: UseDevelopmentStorage=true
+      DEMO_DATA_ENABLED: 'true'
+      SESSION_COOKIE_SECURE: 'false'
+      SPEAKING_LAB_SKIP_DB_INIT: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Start pinned Azurite
+        shell: bash
+        run: |
+          docker run --detach --name azurite --publish 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+          for attempt in {1..30}; do
+            if curl --silent --output /dev/null http://127.0.0.1:10000/devstoreaccount1?comp=list; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs azurite
+          exit 1
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: 'false'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        working-directory: web
+        run: npm ci
+
+      - name: Install PostgreSQL 17 client tools
+        shell: bash
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] http://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo "$VERSION_CODENAME")-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+
+      - name: Verify private Blob adapter against Azurite
+        working-directory: web
+        run: |
+          node --import tsx --input-type=module -e "
+            import { uploadAudioObject, downloadAudioObject } from './src/lib/storage/audio-storage.ts';
+            const expected = Buffer.from('private-audio-round-trip');
+            await uploadAudioObject('verification/round-trip.txt', expected, 'text/plain');
+            const actual = await downloadAudioObject('verification/round-trip.txt');
+            if (!actual.data.equals(expected) || actual.contentType !== 'text/plain') {
+              throw new Error('Blob round trip failed');
+            }
+          "
+
+      - name: Generate CI-only account passwords
+        shell: bash
+        run: |
+          echo "DEMO_ADMIN_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
+          echo "DEMO_TEACHER_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
+          echo "DEMO_STUDENT_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
+          echo "MIGRATION_BOOTSTRAP_ADMIN_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
+
+      - name: Runtime dependency gate
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Migrate, seed, and check PostgreSQL
+        working-directory: web
+        run: |
+          npm run db:migrate
+          npm run db:seed
+          npm run db:check
+
+      - name: Verify SQLite importer against a fresh PostgreSQL database
+        working-directory: web
+        shell: bash
+        run: |
+          PGPASSWORD=ci-postgres-only createdb -h 127.0.0.1 -U speaking speaking_import
+          npx tsx scripts/create-sqlite-fixture.ts --out /tmp/speaking-fixture.db
+          DATABASE_URL=postgresql://speaking:ci-postgres-only@127.0.0.1:5432/speaking_import npm run db:migrate
+          DATABASE_URL=postgresql://speaking:ci-postgres-only@127.0.0.1:5432/speaking_import \
+            npm run migrate:sqlite -- --source /tmp/speaking-fixture.db --verification --skip-audio \
+            --report /tmp/sqlite-reconciliation.json
+          DATABASE_URL=postgresql://speaking:ci-postgres-only@127.0.0.1:5432/speaking_import npm run db:check
+          import_security="$(PGPASSWORD=ci-postgres-only psql -h 127.0.0.1 -U speaking -d speaking_import \
+            -v ON_ERROR_STOP=1 -Atc "
+              SELECT
+                (SELECT COUNT(*) FROM sessions) = 0 AND
+                (SELECT COUNT(*) FROM user_accounts WHERE lower(role)='admin' AND is_active AND must_change_password) = 1 AND
+                (SELECT COUNT(*) FROM user_accounts WHERE lower(role)<>'admin' AND NOT is_active AND must_change_password) = 2 AND
+                (SELECT COUNT(*) FROM app_settings
+                  WHERE key ~* '(^|_)(api_?key|secret|password|passwd|token|credential|private_?key|connection_?string)(_|$)') = 0
+            ")"
+          test "$import_security" = "t"
+          ! grep --fixed-strings 'configured-provider-value' /tmp/sqlite-reconciliation.json
+          ! grep --fixed-strings 'unknown-secret-value' /tmp/sqlite-reconciliation.json
+          ! grep --fixed-strings "$MIGRATION_BOOTSTRAP_ADMIN_PASSWORD" /tmp/sqlite-reconciliation.json
+          cp /tmp/sqlite-reconciliation.json sqlite-reconciliation.json
+
+      - name: Typecheck and unit tests
+        working-directory: web
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: PostgreSQL backup and clean restore drill
+        working-directory: web
+        env:
+          BACKUP_DIR: ${{ runner.temp }}/postgres-backup
+          DATABASE_ADMIN_URL: postgresql://speaking:ci-postgres-only@127.0.0.1:5432/speaking_lab
+        run: |
+          npm run backup:data
+          npm run backup:restore-test
+
+      - name: Production build
+        working-directory: web
+        run: npm run build
+
+      - name: Learning-quality and mutation gates
+        working-directory: web
+        run: npm run test:live-gates
+
+      - name: Install Playwright
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke tests
+        working-directory: web
+        run: npm run test:e2e
+
+      - name: Build and inspect production image
+        run: |
+          docker build -t speaking-lab:${GITHUB_SHA} .
+          docker history --no-trunc speaking-lab:${GITHUB_SHA} > image-history.txt
+          docker run --rm --entrypoint sh speaking-lab:${GITHUB_SHA} -c '
+            if find /app \( -iname "*sqlite*" -o -iname "*electron*" -o -name "*.db" -o -name ".env*" \) | grep -q .; then
+              exit 1
+            fi
+            if find /app/.next/server /app/.next/node_modules \
+              \( -ipath "*huggingface*" -o -ipath "*mintplex*" -o -ipath "*piper-tts*" -o -ipath "*phonemizer*" \) \
+              2>/dev/null | grep -q .; then
+              exit 1
+            fi
+          '
+
+      - name: Upload non-secret test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-reports
+          path: |
+            web/playwright-report
+            web/test-results
+            image-history.txt
+            web/sqlite-reconciliation.json
+          if-no-files-found: ignore

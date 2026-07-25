@@ -1,5 +1,4 @@
-import { db } from '../db';
-import { sqlite } from '../db';
+import { db, pool } from '../db';
 import {
   studentXp,
   badges,
@@ -11,8 +10,8 @@ import {
 } from '../db/schema';
 import { eq, and, desc, sql, sum } from 'drizzle-orm';
 
-export function awardXp(studentId: number, amount: number, reason: string) {
-  return db
+export async function awardXp(studentId: number, amount: number, reason: string) {
+  return ((await db
     .insert(studentXp)
     .values({
       studentId,
@@ -20,21 +19,19 @@ export function awardXp(studentId: number, amount: number, reason: string) {
       reason,
       earnedAt: new Date().toISOString(),
     })
-    .returning()
-    .get();
+    .returning())[0]);
 }
 
-export function getStudentXp(studentId: number): number {
-  const result = db
+export async function getStudentXp(studentId: number): Promise<number> {
+  const result = ((await db
     .select({ total: sum(studentXp.amount) })
     .from(studentXp)
-    .where(eq(studentXp.studentId, studentId))
-    .get();
+    .where(eq(studentXp.studentId, studentId)).limit(1))[0]);
   return Number(result?.total ?? 0);
 }
 
-export function getStudentBadges(studentId: number) {
-  return db
+export async function getStudentBadges(studentId: number) {
+  return (await db
     .select({
       id: studentBadges.id,
       earnedAt: studentBadges.earnedAt,
@@ -47,77 +44,72 @@ export function getStudentBadges(studentId: number) {
     })
     .from(studentBadges)
     .innerJoin(badges, eq(studentBadges.badgeId, badges.id))
-    .where(eq(studentBadges.studentId, studentId))
-    .all();
+    .where(eq(studentBadges.studentId, studentId)));
 }
 
-export function checkAndAwardBadges(studentId: number) {
+export async function checkAndAwardBadges(studentId: number) {
   const now = new Date().toISOString();
-  const earned = getStudentBadges(studentId);
+  const earned = await getStudentBadges(studentId);
   const earnedCodes = new Set(earned.map((b) => b.code));
   const newlyAwarded: Array<{ code: string; name: string; xpReward: number }> = [];
 
-  function tryAward(code: string) {
+  async function tryAward(code: string) {
     if (earnedCodes.has(code)) return;
-    const badge = db.select().from(badges).where(eq(badges.code, code)).get();
+    const badge = ((await db.select().from(badges).where(eq(badges.code, code)).limit(1))[0]);
     if (!badge) return;
-    db.insert(studentBadges)
-      .values({ studentId, badgeId: badge.id, earnedAt: now })
-      .run();
+    (await db.insert(studentBadges)
+      .values({ studentId, badgeId: badge.id, earnedAt: now }));
     if (badge.xpReward > 0) {
-      awardXp(studentId, badge.xpReward, 'badge_earned');
+      await awardXp(studentId, badge.xpReward, 'badge_earned');
     }
     newlyAwarded.push({ code: badge.code, name: badge.name, xpReward: badge.xpReward });
   }
 
   // Count distinct words practiced (via attempts -> practice_tasks -> vocabulary_item_id)
-  const distinctWordsRow = sqlite
-    .prepare(
+  const distinctWordsResult = await pool.query<{ cnt: number }>(
       `SELECT COUNT(DISTINCT pt.vocabulary_item_id) as cnt
        FROM attempts a
        JOIN practice_tasks pt ON a.practice_task_id = pt.id
-       WHERE a.student_id = ? AND pt.vocabulary_item_id IS NOT NULL`
-    )
-    .get(studentId) as { cnt: number } | undefined;
-  const distinctWords = distinctWordsRow?.cnt ?? 0;
+       WHERE a.student_id = $1 AND pt.vocabulary_item_id IS NOT NULL`,
+      [studentId],
+    );
+  const distinctWordsRow = distinctWordsResult.rows[0];
+  const distinctWords = Number(distinctWordsRow?.cnt ?? 0);
 
-  if (distinctWords >= 1) tryAward('first_word');
-  if (distinctWords >= 10) tryAward('10_words');
-  if (distinctWords >= 50) tryAward('50_words');
-  if (distinctWords >= 100) tryAward('100_words');
+  if (distinctWords >= 1) await tryAward('first_word');
+  if (distinctWords >= 10) await tryAward('10_words');
+  if (distinctWords >= 50) await tryAward('50_words');
+  if (distinctWords >= 100) await tryAward('100_words');
 
   // Check streak
-  const streak = getStreak(studentId);
-  if (streak >= 3) tryAward('streak_3');
-  if (streak >= 7) tryAward('streak_7');
-  if (streak >= 30) tryAward('streak_30');
+  const streak = await getStreak(studentId);
+  if (streak >= 3) await tryAward('streak_3');
+  if (streak >= 7) await tryAward('streak_7');
+  if (streak >= 30) await tryAward('streak_30');
 
   // Check perfect score
-  const perfectRow = sqlite
-    .prepare(
-      `SELECT COUNT(*) as cnt FROM attempts WHERE student_id = ? AND composite_score >= 0.95`
-    )
-    .get(studentId) as { cnt: number } | undefined;
-  if ((perfectRow?.cnt ?? 0) > 0) tryAward('perfect_score');
+  const perfectResult = await pool.query<{ cnt: number }>(
+    `SELECT COUNT(*)::int as cnt FROM attempts WHERE student_id = $1 AND composite_score >= 0.95`,
+    [studentId],
+  );
+  if ((perfectResult.rows[0]?.cnt ?? 0) > 0) await tryAward('perfect_score');
 
   // Count mastered words
-  const masteredRow = sqlite
-    .prepare(
-      `SELECT COUNT(*) as cnt FROM word_mastery_records WHERE student_id = ? AND mastery_status = 'Mastered'`
-    )
-    .get(studentId) as { cnt: number } | undefined;
-  if ((masteredRow?.cnt ?? 0) >= 10) tryAward('mastered_10');
+  const masteredResult = await pool.query<{ cnt: number }>(
+    `SELECT COUNT(*)::int as cnt FROM word_mastery_records WHERE student_id = $1 AND mastery_status = 'Mastered'`,
+    [studentId],
+  );
+  if ((masteredResult.rows[0]?.cnt ?? 0) >= 10) await tryAward('mastered_10');
 
   return newlyAwarded;
 }
 
-export function getStreak(studentId: number): number {
+export async function getStreak(studentId: number): Promise<number> {
   // Get distinct dates with at least 1 attempt, ordered descending
-  const rows = sqlite
-    .prepare(
-      `SELECT DISTINCT DATE(timestamp) as d FROM attempts WHERE student_id = ? ORDER BY d DESC`
-    )
-    .all(studentId) as Array<{ d: string }>;
+  const { rows } = await pool.query<{ d: string }>(
+    `SELECT DISTINCT timestamp::date::text as d FROM attempts WHERE student_id = $1 ORDER BY d DESC`,
+    [studentId],
+  );
 
   if (rows.length === 0) return 0;
 
@@ -151,18 +143,17 @@ export function getStreak(studentId: number): number {
   return streak;
 }
 
-export function getDailyGoal(studentId: number) {
+export async function getDailyGoal(studentId: number) {
   const today = new Date().toISOString().split('T')[0];
-  const existing = db
+  const existing = ((await db
     .select()
     .from(dailyGoals)
-    .where(and(eq(dailyGoals.studentId, studentId), eq(dailyGoals.date, today)))
-    .get();
+    .where(and(eq(dailyGoals.studentId, studentId), eq(dailyGoals.date, today))).limit(1))[0]);
 
   if (existing) return existing;
 
   // Create today's goal
-  return db
+  return ((await db
     .insert(dailyGoals)
     .values({
       studentId,
@@ -171,38 +162,36 @@ export function getDailyGoal(studentId: number) {
       completedWords: 0,
       completed: false,
     })
-    .returning()
-    .get();
+    .returning())[0]);
 }
 
-export function updateDailyGoal(studentId: number, wordsCompleted: number) {
+export async function updateDailyGoal(studentId: number, wordsCompleted: number) {
   const today = new Date().toISOString().split('T')[0];
-  const goal = getDailyGoal(studentId);
+  const goal = await getDailyGoal(studentId);
 
   const newCompleted = goal.completedWords + wordsCompleted;
   const isCompleted = newCompleted >= goal.targetWords;
 
-  db.update(dailyGoals)
+  (await db.update(dailyGoals)
     .set({
       completedWords: newCompleted,
       completed: isCompleted,
     })
-    .where(and(eq(dailyGoals.studentId, studentId), eq(dailyGoals.date, today)))
-    .run();
+    .where(and(eq(dailyGoals.studentId, studentId), eq(dailyGoals.date, today))));
 
   return { ...goal, completedWords: newCompleted, completed: isCompleted };
 }
 
-export function getLeaderboard(className?: string) {
+export async function getLeaderboard(className?: string) {
   let query: string;
   const params: unknown[] = [];
 
   if (className) {
     query = `
-      SELECT s.id, s.full_name as fullName, s.class, COALESCE(SUM(xp.amount), 0) as totalXp
+      SELECT s.id, s.full_name as "fullName", s.class, COALESCE(SUM(xp.amount), 0) as "totalXp"
       FROM students s
       LEFT JOIN student_xp xp ON s.id = xp.student_id
-      WHERE s.class = ? AND s.is_active = 1
+      WHERE s.class = $1 AND s.is_active = true
       GROUP BY s.id
       ORDER BY totalXp DESC
       LIMIT 50
@@ -210,20 +199,21 @@ export function getLeaderboard(className?: string) {
     params.push(className);
   } else {
     query = `
-      SELECT s.id, s.full_name as fullName, s.class, COALESCE(SUM(xp.amount), 0) as totalXp
+      SELECT s.id, s.full_name as "fullName", s.class, COALESCE(SUM(xp.amount), 0) as "totalXp"
       FROM students s
       LEFT JOIN student_xp xp ON s.id = xp.student_id
-      WHERE s.is_active = 1
+      WHERE s.is_active = true
       GROUP BY s.id
       ORDER BY totalXp DESC
       LIMIT 50
     `;
   }
 
-  return sqlite.prepare(query).all(...params) as Array<{
+  const result = await pool.query<{
     id: number;
     fullName: string;
     class: string | null;
     totalXp: number;
-  }>;
+  }>(query, params);
+  return result.rows.map((row) => ({ ...row, totalXp: Number(row.totalXp) }));
 }

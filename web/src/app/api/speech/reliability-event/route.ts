@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     assertNoSensitiveKeys(body);
     assertNoSensitiveKeys((body as Record<string, unknown>).metadata);
 
-    const event = recordSpeechReliabilityEvent({
+    const event = await recordSpeechReliabilityEvent({
       userId: user.id,
       studentId: user.studentId,
       eventType: eventType((body as Record<string, unknown>).eventType),

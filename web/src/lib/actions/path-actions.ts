@@ -1,4 +1,4 @@
-import { sqlite } from '@/lib/db';
+import { pool } from '@/lib/db';
 import { getHomeworkForStudent, type HomeworkAssignmentView, type HomeworkPathConfig } from './homework-actions';
 
 export type PathStageKey = 'listen-repeat' | 'context' | 'original' | 'controlled-dialogue' | 'open-scenario';
@@ -35,69 +35,75 @@ const STAGES: Array<Pick<LearnerPathStage, 'key' | 'title' | 'description'>> = [
   { key: 'open-scenario', title: 'Open scenario', description: 'Use the lesson language in a freer role-play.' },
 ];
 
-function targetIds(assignment: HomeworkAssignmentView, config: HomeworkPathConfig): number[] {
+async function targetIds(assignment: HomeworkAssignmentView, config: HomeworkPathConfig): Promise<number[]> {
   if (config.targetWordIds.length) return config.targetWordIds;
   if (assignment.wordIds.length) return assignment.wordIds;
   if (!assignment.klpIds.length) return [];
-  const rows = sqlite.prepare(`
+  const result = await pool.query<{ id: number }>(`
     SELECT DISTINCT vi.id
     FROM klp_concepts kc
-    JOIN cycles c ON c.id = ?
+    JOIN cycles c ON c.id = $1
     JOIN vocabulary_items vi ON vi.book_id = c.book_id AND lower(trim(vi.word)) = lower(trim(kc.base_item))
-    WHERE kc.id IN (${assignment.klpIds.map(() => '?').join(',')})
-  `).all(assignment.cycleId, ...assignment.klpIds) as Array<{ id: number }>;
-  return rows.map((row) => Number(row.id));
+    WHERE kc.id = ANY($2::int[])
+  `, [assignment.cycleId, assignment.klpIds]);
+  return result.rows.map((row) => Number(row.id));
 }
 
-function wordProgress(studentId: number, cycleId: number, wordIds: number[], taskTypes: string[]) {
+async function wordProgress(studentId: number, cycleId: number, wordIds: number[], taskTypes: string[]) {
   if (!wordIds.length) return { complete: 0, required: 0, completedItems: [] as number[] };
   const normalized = taskTypes.map((type) => type.toLowerCase());
-  const rows = sqlite.prepare(`
-    SELECT vi.id AS wordId,
+  const result = await pool.query<{ wordId: number; passed: boolean }>(`
+    SELECT vi.id AS "wordId",
       MAX(CASE WHEN a.composite_score >= pt.pass_score THEN 1 ELSE 0 END) AS passed
     FROM vocabulary_items vi
-    LEFT JOIN practice_tasks pt ON pt.vocabulary_item_id = vi.id AND lower(pt.task_type) IN (${normalized.map(() => '?').join(',')})
-    LEFT JOIN attempts a ON a.practice_task_id = pt.id AND a.student_id = ? AND a.cycle_id = ?
-    WHERE vi.id IN (${wordIds.map(() => '?').join(',')})
+    LEFT JOIN practice_tasks pt ON pt.vocabulary_item_id = vi.id AND lower(pt.task_type) = ANY($1::text[])
+    LEFT JOIN attempts a ON a.practice_task_id = pt.id AND a.student_id = $2 AND a.cycle_id = $3
+    WHERE vi.id = ANY($4::int[])
     GROUP BY vi.id
-  `).all(...normalized, studentId, cycleId, ...wordIds) as Array<{ wordId: number; passed: number }>;
-  const completedItems = rows.filter((row) => Boolean(row.passed)).map((row) => Number(row.wordId));
+  `, [normalized, studentId, cycleId, wordIds]);
+  const completedItems = result.rows.filter((row) => Boolean(row.passed)).map((row) => Number(row.wordId));
   return { complete: completedItems.length, required: wordIds.length, completedItems };
 }
 
-function scenarioProgress(studentId: number, scenarioId: string | null) {
+async function scenarioProgress(studentId: number, scenarioId: string | null) {
   if (!scenarioId) return { complete: 0, required: 1, completedItems: [] as string[] };
-  const row = sqlite.prepare(`
-    SELECT id FROM scenario_attempts WHERE student_id = ? AND scenario_id = ? AND score >= 75 ORDER BY id DESC LIMIT 1
-  `).get(studentId, scenarioId) as { id: number } | undefined;
+  const result = await pool.query<{ id: number }>(
+    `SELECT id FROM scenario_attempts WHERE student_id = $1 AND scenario_id = $2 AND score >= 75 ORDER BY id DESC LIMIT 1`,
+    [studentId, scenarioId],
+  );
+  const row = result.rows[0];
   return { complete: row ? 1 : 0, required: 1, completedItems: row ? [scenarioId] : [] };
 }
 
-function persistProgress(homeworkId: number, studentId: number, stage: LearnerPathStage, completedItems: Array<number | string>) {
+async function persistProgress(homeworkId: number, studentId: number, stage: LearnerPathStage, completedItems: Array<number | string>) {
   const now = new Date().toISOString();
-  sqlite.prepare(`
+  await pool.query(`
     INSERT INTO homework_path_progress(homework_id, student_id, stage_key, status, completed_items_json, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    VALUES ($1, $2, $3, $4, $5::jsonb, $6)
     ON CONFLICT(homework_id, student_id, stage_key) DO UPDATE SET
       status = excluded.status, completed_items_json = excluded.completed_items_json, updated_at = excluded.updated_at
-  `).run(homeworkId, studentId, stage.key, stage.status, JSON.stringify(completedItems), now);
+  `, [homeworkId, studentId, stage.key, stage.status, JSON.stringify(completedItems), now]);
 }
 
-function buildConfiguredPath(studentId: number, assignment: HomeworkAssignmentView): LearnerAssignmentPath {
+async function buildConfiguredPath(studentId: number, assignment: HomeworkAssignmentView): Promise<LearnerAssignmentPath> {
   const config = assignment.pathConfig!;
-  const ids = targetIds(assignment, config);
+  const ids = await targetIds(assignment, config);
   const words = ids.length
-    ? sqlite.prepare(`SELECT id, word, example_sentence AS exampleSentence FROM vocabulary_items WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY sort_order, id`).all(...ids) as LearnerAssignmentPath['targetWords']
+    ? (await pool.query<LearnerAssignmentPath['targetWords'][number]>(
+        `SELECT id, word, example_sentence AS "exampleSentence" FROM vocabulary_items WHERE id = ANY($1::int[]) ORDER BY sort_order, id`,
+        [ids],
+      )).rows
     : [];
-  const results = [
+  const results = await Promise.all([
     wordProgress(studentId, assignment.cycleId, ids, ['listenrepeat', 'repeat']),
     wordProgress(studentId, assignment.cycleId, ids, ['sentenceframe', 'sentence']),
     wordProgress(studentId, assignment.cycleId, ids, ['freerecall', 'free-speak']),
     scenarioProgress(studentId, config.controlledScenarioId),
     scenarioProgress(studentId, config.openScenarioId),
-  ];
+  ]);
   let previousComplete = true;
-  const stages = STAGES.map((meta, index): LearnerPathStage => {
+  const stages: LearnerPathStage[] = [];
+  for (const [index, meta] of STAGES.entries()) {
     const result = results[index];
     const complete = result.required > 0 && result.complete >= result.required;
     const status: PathStageStatus = complete ? 'complete' : previousComplete ? (result.complete > 0 ? 'in-progress' : 'available') : 'locked';
@@ -121,9 +127,9 @@ function buildConfiguredPath(studentId: number, assignment: HomeworkAssignmentVi
       }
     }
     const stage = { ...meta, number: index + 1, status, completed: result.complete, required: result.required, href: status === 'locked' ? null : href };
-    persistProgress(assignment.id, studentId, stage, result.completedItems);
-    return stage;
-  });
+    await persistProgress(assignment.id, studentId, stage, result.completedItems);
+    stages.push(stage);
+  }
   const completeCount = stages.filter((stage) => stage.status === 'complete').length;
   return {
     assignmentId: assignment.id,
@@ -138,16 +144,16 @@ function buildConfiguredPath(studentId: number, assignment: HomeworkAssignmentVi
   };
 }
 
-export function getLearnerPaths(studentId: number) {
-  const assignmentRows = getHomeworkForStudent(studentId, '');
-  const paths = assignmentRows.map((assignment): LearnerAssignmentPath => {
-    if (assignment.pathConfig) return buildConfiguredPath(studentId, assignment);
+export async function getLearnerPaths(studentId: number) {
+  const assignmentRows = await getHomeworkForStudent(studentId, '');
+  const paths = await Promise.all(assignmentRows.map(async (assignment): Promise<LearnerAssignmentPath> => {
+    if (assignment.pathConfig) return await buildConfiguredPath(studentId, assignment);
     return {
       assignmentId: assignment.id, title: assignment.title, description: assignment.description,
       dueDate: assignment.dueDate, legacy: true, complete: Boolean(assignment.submitted), progressPercent: assignment.submitted ? 100 : 0,
       targetWords: [], stages: [],
     };
-  });
+  }));
   const configured = paths.filter((path) => !path.legacy);
   const activePath = configured.find((path) => !path.complete) ?? configured[0] ?? null;
   return { activePath, paths, legacyAssignments: paths.filter((path) => path.legacy) };

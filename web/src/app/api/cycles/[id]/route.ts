@@ -16,7 +16,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const auth = await requireAdmin();
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
   const { id } = await params;
-  const cycle = getCycleWithEnrollments(Number(id));
+  const cycle = await getCycleWithEnrollments(Number(id));
   if (!cycle) return Response.json({ error: 'Not found.' }, { status: 404 });
   return Response.json({ cycle });
 }
@@ -29,13 +29,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   // Allow either updating fields or modifying enrollments
   if (Array.isArray(body.enrollIds)) {
-    enrollStudents(Number(id), body.enrollIds);
+    await enrollStudents(Number(id), body.enrollIds);
   }
   if (typeof body.unenrollId === 'number') {
-    unenrollStudent(Number(id), body.unenrollId);
+    await unenrollStudent(Number(id), body.unenrollId);
   }
   if (body.startDate || body.endDate || body.bookId !== undefined || body.teacherNotes !== undefined) {
-    updateCycle(Number(id), body);
+    await updateCycle(Number(id), body);
   }
   return Response.json({ ok: true });
 }
@@ -44,6 +44,6 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   const auth = await requireAdmin();
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
   const { id } = await params;
-  deleteCycle(Number(id));
+  await deleteCycle(Number(id));
   return Response.json({ ok: true });
 }

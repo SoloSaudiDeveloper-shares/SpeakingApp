@@ -39,11 +39,10 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Missing required fields.' }, { status: 400 });
     }
 
-    const text = db
+    const text = ((await db
       .select()
       .from(studentTexts)
-      .where(and(eq(studentTexts.id, textId), eq(studentTexts.studentId, user.studentId)))
-      .get();
+      .where(and(eq(studentTexts.id, textId), eq(studentTexts.studentId, user.studentId))).limit(1))[0]);
     if (!text) return Response.json({ error: 'Text not found.' }, { status: 404 });
 
     const transcript = typeof spokenTranscript === 'string' ? spokenTranscript : '';
@@ -55,7 +54,7 @@ export async function POST(request: Request) {
       cefrBand: 'A1',
     });
 
-    const attempt = recordTextAttempt({
+    const attempt = await recordTextAttempt({
       studentTextId: textId,
       studentId: user.studentId,
       spokenTranscript: transcript,

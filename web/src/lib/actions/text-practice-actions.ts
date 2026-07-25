@@ -2,7 +2,7 @@ import { db } from '../db';
 import { studentTexts, textAttempts, studentWordLists } from '../db/schema';
 import { eq, desc } from 'drizzle-orm';
 
-export function saveText(
+export async function saveText(
   studentId: number,
   title: string,
   originalText: string,
@@ -10,7 +10,7 @@ export function saveText(
 ) {
   const wordCount = originalText.split(/\s+/).filter(Boolean).length;
   const now = new Date().toISOString();
-  return db
+  return ((await db
     .insert(studentTexts)
     .values({
       studentId,
@@ -20,39 +20,35 @@ export function saveText(
       wordCount,
       createdAt: now,
     })
-    .returning()
-    .get();
+    .returning())[0]);
 }
 
-export function getStudentTexts(studentId: number) {
-  return db
+export async function getStudentTexts(studentId: number) {
+  return (await db
     .select()
     .from(studentTexts)
     .where(eq(studentTexts.studentId, studentId))
-    .orderBy(desc(studentTexts.createdAt))
-    .all();
+    .orderBy(desc(studentTexts.createdAt)));
 }
 
-export function getTextById(id: number) {
-  const text = db
+export async function getTextById(id: number) {
+  const text = ((await db
     .select()
     .from(studentTexts)
-    .where(eq(studentTexts.id, id))
-    .get();
+    .where(eq(studentTexts.id, id)).limit(1))[0]);
 
   if (!text) return null;
 
-  const attempts = db
+  const attempts = (await db
     .select()
     .from(textAttempts)
     .where(eq(textAttempts.studentTextId, id))
-    .orderBy(desc(textAttempts.attemptedAt))
-    .all();
+    .orderBy(desc(textAttempts.attemptedAt)));
 
   return { ...text, attempts };
 }
 
-export function recordTextAttempt(data: {
+export async function recordTextAttempt(data: {
   studentTextId: number;
   studentId: number;
   spokenTranscript: string;
@@ -64,7 +60,7 @@ export function recordTextAttempt(data: {
   durationSeconds: number;
 }) {
   const now = new Date().toISOString();
-  const result = db
+  const result = ((await db
     .insert(textAttempts)
     .values({
       studentTextId: data.studentTextId,
@@ -78,30 +74,27 @@ export function recordTextAttempt(data: {
       attemptedAt: now,
       durationSeconds: data.durationSeconds,
     })
-    .returning()
-    .get();
+    .returning())[0]);
 
   // Update lastPracticedAt on the text
-  db.update(studentTexts)
+  (await db.update(studentTexts)
     .set({ lastPracticedAt: now })
-    .where(eq(studentTexts.id, data.studentTextId))
-    .run();
+    .where(eq(studentTexts.id, data.studentTextId)));
 
   return result;
 }
 
-export function getTextAttempts(studentTextId: number) {
-  return db
+export async function getTextAttempts(studentTextId: number) {
+  return (await db
     .select()
     .from(textAttempts)
     .where(eq(textAttempts.studentTextId, studentTextId))
-    .orderBy(desc(textAttempts.attemptedAt))
-    .all();
+    .orderBy(desc(textAttempts.attemptedAt)));
 }
 
-export function saveWordList(studentId: number, name: string, words: Array<{ word: string; meaning?: string; fromTextId?: number }>) {
+export async function saveWordList(studentId: number, name: string, words: Array<{ word: string; meaning?: string; fromTextId?: number }>) {
   const now = new Date().toISOString();
-  return db
+  return ((await db
     .insert(studentWordLists)
     .values({
       studentId,
@@ -109,23 +102,21 @@ export function saveWordList(studentId: number, name: string, words: Array<{ wor
       words: JSON.stringify(words),
       createdAt: now,
     })
-    .returning()
-    .get();
+    .returning())[0]);
 }
 
-export function getStudentWordLists(studentId: number) {
-  return db
+export async function getStudentWordLists(studentId: number) {
+  return (await db
     .select()
     .from(studentWordLists)
     .where(eq(studentWordLists.studentId, studentId))
-    .orderBy(desc(studentWordLists.createdAt))
-    .all();
+    .orderBy(desc(studentWordLists.createdAt)));
 }
 
-export function deleteText(id: number) {
-  db.delete(studentTexts).where(eq(studentTexts.id, id)).run();
+export async function deleteText(id: number) {
+  (await db.delete(studentTexts).where(eq(studentTexts.id, id)));
 }
 
-export function deleteWordList(id: number) {
-  db.delete(studentWordLists).where(eq(studentWordLists.id, id)).run();
+export async function deleteWordList(id: number) {
+  (await db.delete(studentWordLists).where(eq(studentWordLists.id, id)));
 }

@@ -17,7 +17,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
   const { id } = await params;
   const body = await req.json();
-  updateVocabularyItem(Number(id), body);
+  await updateVocabularyItem(Number(id), body);
   return Response.json({ ok: true });
 }
 
@@ -25,6 +25,6 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   const auth = await requireAdmin();
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
   const { id } = await params;
-  deleteVocabularyItem(Number(id));
+  await deleteVocabularyItem(Number(id));
   return Response.json({ ok: true });
 }

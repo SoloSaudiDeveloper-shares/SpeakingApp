@@ -2,7 +2,7 @@ import { probeProvider, getActiveProvider } from '@/lib/ai/providers';
 
 export async function GET() {
   try {
-    const cfg = getActiveProvider();
+    const cfg = await getActiveProvider();
     const probe = await probeProvider();
     return Response.json({
       online: probe.ok,

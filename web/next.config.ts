@@ -1,20 +1,18 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Bundle everything required to run the server into .next/standalone
-  // — this is what the Electron app will execute at startup.
+  // Produce the minimal server image used by Azure Container Apps.
   output: "standalone",
-
-  // Native modules / large libs that should stay external (not bundled by webpack)
-  serverExternalPackages: ['better-sqlite3', '@huggingface/transformers'],
-
-  // Force the file tracer to include better-sqlite3's native binary in the
-  // standalone bundle. Without this, Next.js sees it as "external" and skips it.
-  outputFileTracingIncludes: {
-    '/**/*': [
-      './node_modules/better-sqlite3/**/*',
-      './node_modules/bindings/**/*',
-      './node_modules/file-uri-to-path/**/*',
+  outputFileTracingExcludes: {
+    "/*": [
+      "./.test-cache/**/*",
+      "./scripts/**/*",
+      "./tests/**/*",
+      "./node_modules/@huggingface/transformers/**/*",
+      "./node_modules/@mintplex-labs/piper-tts-web/**/*",
+      "./node_modules/phonemizer/**/*",
+      "./node_modules/better-sqlite3/**/*",
+      "./node_modules/drizzle-kit/**/*",
     ],
   },
 

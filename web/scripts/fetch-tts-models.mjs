@@ -12,7 +12,7 @@
 //   • Piper voices are handled separately (piper-tts-web) in a later step.
 //
 // Transformers.js loads from `${env.localModelPath}/${modelId}/...`, and
-// prepare-electron-build.mjs already mirrors public/ into the standalone bundle.
+// The Docker runner copies public/ beside the standalone server bundle.
 
 import fs from "node:fs"
 import path from "node:path"

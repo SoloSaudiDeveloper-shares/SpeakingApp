@@ -66,10 +66,9 @@ export const STT_ENGINE_OPTIONS: SttEngineOption[] = [
   // Groq's hosted Whisper is the default: fast and very accurate online, with an
   // automatic fall back to the bundled offline Whisper when there's no internet.
   { id: "groq-whisper",        name: "Groq Whisper (cloud)", label: "Groq Whisper (cloud)", offline: false, size: "0 MB", quality: "Excellent", speed: "Real-time", compute: "Cloud + offline fallback" },
-  // Whisper Tiny ships bundled with the app and runs locally on the CPU (WASM) —
-  // no internet, no WebGPU, works inside the packaged Electron app. Web Speech
-  // is online-only (Google) and does NOT work in the standalone build. The other
-  // models download on first use from Hugging Face if explicitly selected.
+  // Whisper Tiny ships bundled with the web app and runs locally on the CPU
+  // (WASM), without internet or WebGPU. Web Speech is browser/vendor dependent.
+  // The other models download on first use if explicitly selected.
   { id: "web-speech-api",      name: "Web Speech API", label: "Web Speech (online)", offline: false, size: "0 MB",   quality: "Good",      speed: "Real-time", compute: "Cloud"      },
   { id: "webai-whisper-tiny",  name: "Whisper Tiny",   label: "Whisper Tiny (bundled)", offline: true,  size: "Bundled", quality: "Good",      speed: "Fast",      compute: "CPU (WASM)" },
   { id: "webai-whisper-base",  name: "Whisper Base",   label: "Whisper Base",           offline: false, size: "~210 MB", quality: "Very Good", speed: "Medium",    compute: "Download required" },

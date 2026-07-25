@@ -27,6 +27,7 @@ export default function AdminStudentsPage() {
   const [editData, setEditData] = useState<Partial<Student> & { password?: string }>({})
   const [bulkClass, setBulkClass] = useState<string>("")
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [formError, setFormError] = useState<string | null>(null)
 
   const load = () => {
     Promise.all([
@@ -44,6 +45,11 @@ export default function AdminStudentsPage() {
   useEffect(load, [])
 
   const handleCreate = async () => {
+    setFormError(null)
+    if (formData.password.length < 12) {
+      setFormError("Enter a temporary password of at least 12 characters.")
+      return
+    }
     setSaving(true)
     try {
       const res = await fetch("/api/students", {
@@ -55,8 +61,13 @@ export default function AdminStudentsPage() {
         setFormData({ uniqueNumber: "", fullName: "", class: "", cefrBand: "A1", password: "" })
         setShowForm(false)
         load()
+      } else {
+        const data = await res.json().catch(() => ({}))
+        setFormError(data?.error ?? "Could not create student.")
       }
-    } catch { /* ignore */ }
+    } catch {
+      setFormError("Network error. Please try again.")
+    }
     setSaving(false)
   }
 
@@ -92,14 +103,23 @@ export default function AdminStudentsPage() {
   }
 
   const handleResetPassword = async (id: number, uniqueNumber: string) => {
-    const newPw = prompt(`Set new password for ${uniqueNumber}:`, uniqueNumber)
+    const newPw = prompt(`Set a temporary password of at least 12 characters for ${uniqueNumber}:`)
     if (!newPw) return
-    await fetch(`/api/students/${id}`, {
+    if (newPw.length < 12) {
+      alert("Password must be at least 12 characters.")
+      return
+    }
+    const response = await fetch(`/api/students/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: newPw }),
     })
-    alert("Password updated.")
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      alert(data?.error ?? "Password could not be updated.")
+      return
+    }
+    alert("Temporary password updated. Existing sessions were revoked and the student must change it at next sign-in.")
   }
 
   const handleResetDiagnostic = async (id: number, name: string) => {
@@ -192,10 +212,11 @@ export default function AdminStudentsPage() {
             <select value={formData.cefrBand} onChange={(e) => setFormData({ ...formData, cefrBand: e.target.value })} className="bg-background border border-input rounded-md px-3 py-2 w-full text-sm">
               {CEFR_BANDS.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
-            <input placeholder="Password (default = number)" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} className="bg-background border border-input rounded-md px-3 py-2 w-full text-sm" />
+            <input type="password" autoComplete="new-password" placeholder="Temporary password (12+ characters)" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} className="bg-background border border-input rounded-md px-3 py-2 w-full text-sm" />
           </div>
+          {formError && <p className="text-sm text-destructive">{formError}</p>}
           <div className="flex gap-2">
-            <button onClick={handleCreate} disabled={saving || !formData.uniqueNumber || !formData.fullName} className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition disabled:opacity-50">
+            <button onClick={handleCreate} disabled={saving || !formData.uniqueNumber || !formData.fullName || formData.password.length < 12} className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition disabled:opacity-50">
               {saving ? "Creating..." : "Create Student"}
             </button>
             <button onClick={() => setShowForm(false)} className="rounded-md border border-border px-4 py-2 text-sm">Cancel</button>
