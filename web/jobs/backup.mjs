@@ -43,6 +43,8 @@ try {
       '--port', url.port || '5432',
       '--username', decodeURIComponent(url.username),
       '--dbname', url.pathname.replace(/^\//, ''),
+      '--schema=public',
+      '--schema=drizzle',
       '--format=custom', '--compress=9', '--no-owner', '--no-acl', '--file', dump,
     ], {
       env: {

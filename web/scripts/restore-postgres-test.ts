@@ -56,6 +56,8 @@ try {
   const connection = postgresCommandConnection(databaseUrl, testDatabase);
   await run('pg_restore', [
     ...connection.args,
+    '--clean',
+    '--if-exists',
     '--no-owner',
     '--no-acl',
     '--exit-on-error',

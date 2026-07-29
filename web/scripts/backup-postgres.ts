@@ -29,6 +29,8 @@ await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 
 const connection = postgresCommandConnection(databaseUrl);
 await run('pg_dump', [
   ...connection.args,
+  '--schema=public',
+  '--schema=drizzle',
   '--format=custom',
   '--compress=9',
   '--no-owner',
