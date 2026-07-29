@@ -1,0 +1,2 @@
+# Public, local-only Azurite emulator credential; never accepted by Azure Storage.
+9fc87e343f015d7e3b3de0be1395b37990084f4a:compose.yaml:generic-api-key:49
