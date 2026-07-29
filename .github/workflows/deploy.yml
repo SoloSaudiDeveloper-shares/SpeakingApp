@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 concurrency:
   group: speaking-lab-production
@@ -36,29 +37,37 @@ jobs:
       - name: Resolve Azure resources
         shell: bash
         run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
           {
-            echo "ACR_SERVER=$(az acr show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_ACR_NAME }}' --query loginServer -o tsv)"
+            echo "APP_IMAGE=ghcr.io/${owner}/speaking-lab:${RELEASE_SHA}"
+            echo "JOBS_IMAGE=ghcr.io/${owner}/speaking-lab-jobs:${RELEASE_SHA}"
             echo "OLD_IMAGE=$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_CONTAINER_APP }}' --query 'properties.template.containers[0].image' -o tsv)"
             echo "OLD_MIGRATION_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_MIGRATION_JOB }}' --query 'properties.template.containers[0].image' -o tsv)"
             echo "OLD_BACKUP_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_BACKUP_JOB }}' --query 'properties.template.containers[0].image' -o tsv)"
             echo "OLD_XAPI_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_XAPI_JOB }}' --query 'properties.template.containers[0].image' -o tsv)"
           } >> "$GITHUB_ENV"
 
-      - name: Build immutable application and jobs images
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable application and jobs images
         shell: bash
         run: |
-          az acr login --name '${{ vars.AZURE_ACR_NAME }}'
-          docker build --target runner -t "$ACR_SERVER/speaking-lab:${RELEASE_SHA}" .
-          docker build --target jobs -t "$ACR_SERVER/speaking-lab-jobs:${RELEASE_SHA}" .
-          docker push "$ACR_SERVER/speaking-lab:${RELEASE_SHA}"
-          docker push "$ACR_SERVER/speaking-lab-jobs:${RELEASE_SHA}"
+          docker build --target runner -t "$APP_IMAGE" .
+          docker build --target jobs -t "$JOBS_IMAGE" .
+          docker push "$APP_IMAGE"
+          docker push "$JOBS_IMAGE"
 
       - name: Point backup and migration jobs at the immutable image
         shell: bash
         run: |
           for job in '${{ vars.AZURE_MIGRATION_JOB }}' '${{ vars.AZURE_BACKUP_JOB }}'; do
             az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n "$job" \
-              --image "$ACR_SERVER/speaking-lab-jobs:${RELEASE_SHA}"
+              --image "$JOBS_IMAGE"
           done
 
       - name: Pre-migration logical backup
@@ -94,7 +103,7 @@ jobs:
         run: |
           az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
             -n '${{ vars.AZURE_XAPI_JOB }}' \
-            --image "$ACR_SERVER/speaking-lab-jobs:${RELEASE_SHA}"
+            --image "$JOBS_IMAGE"
 
       - name: Deploy and verify new revision
         id: rollout
@@ -103,7 +112,7 @@ jobs:
         run: |
           az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
             -n '${{ vars.AZURE_CONTAINER_APP }}' \
-            --image "$ACR_SERVER/speaking-lab:${RELEASE_SHA}" \
+            --image "$APP_IMAGE" \
             --set-env-vars "APP_COMMIT_SHA=${RELEASE_SHA}"
           url="https://$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
             -n '${{ vars.AZURE_CONTAINER_APP }}' --query properties.configuration.ingress.fqdn -o tsv)"

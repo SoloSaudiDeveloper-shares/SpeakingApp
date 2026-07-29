@@ -1,0 +1,63 @@
+name: Publish free-trial images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: speaking-lab-trial-images
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Resolve immutable GHCR image names
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          {
+            echo "APP_IMAGE=ghcr.io/${owner}/speaking-lab"
+            echo "JOBS_IMAGE=ghcr.io/${owner}/speaking-lab-jobs"
+            echo "RELEASE_SHA=${GITHUB_SHA}"
+          } >> "$GITHUB_ENV"
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish secret-free immutable images
+        shell: bash
+        run: |
+          docker build --target runner \
+            -t "${APP_IMAGE}:${RELEASE_SHA}" \
+            -t "${APP_IMAGE}:trial" .
+          docker build --target jobs \
+            -t "${JOBS_IMAGE}:${RELEASE_SHA}" \
+            -t "${JOBS_IMAGE}:trial" .
+          docker push "${APP_IMAGE}:${RELEASE_SHA}"
+          docker push "${APP_IMAGE}:trial"
+          docker push "${JOBS_IMAGE}:${RELEASE_SHA}"
+          docker push "${JOBS_IMAGE}:trial"
+
+      - name: Record immutable image references
+        shell: bash
+        run: |
+          {
+            echo "### Free-trial images"
+            echo
+            echo "- \`${APP_IMAGE}:${RELEASE_SHA}\`"
+            echo "- \`${JOBS_IMAGE}:${RELEASE_SHA}\`"
+            echo
+            echo "Azure must use the SHA tags above, not the mutable trial tag."
+          } >> "$GITHUB_STEP_SUMMARY"
