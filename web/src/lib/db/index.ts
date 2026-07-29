@@ -4,6 +4,7 @@ import * as schema from './schema';
 
 type DatabaseGlobals = typeof globalThis & {
   __speakingLabPgPool?: Pool;
+  __speakingLabPgClosePromise?: Promise<void>;
   __speakingLabPgShutdownRegistered?: boolean;
 };
 
@@ -60,10 +61,19 @@ pool.on('error', (error) => {
   console.error('[database] Idle PostgreSQL client error:', error.message);
 });
 
-if (process.env.NODE_ENV === 'production' && !globals.__speakingLabPgShutdownRegistered) {
+function closePoolOnce(): Promise<void> {
+  globals.__speakingLabPgClosePromise ??= pool.end();
+  return globals.__speakingLabPgClosePromise;
+}
+
+if (
+  process.env.NODE_ENV === 'production' &&
+  !isBuild &&
+  !globals.__speakingLabPgShutdownRegistered
+) {
   globals.__speakingLabPgShutdownRegistered = true;
   const closePool = () => {
-    void pool.end().catch((error: unknown) => {
+    void closePoolOnce().catch((error: unknown) => {
       console.error(
         '[database] PostgreSQL pool shutdown failed:',
         error instanceof Error ? error.message : 'unknown error',
@@ -88,5 +98,5 @@ export async function checkDatabase(): Promise<{
 }
 
 export async function closeDatabase(): Promise<void> {
-  await pool.end();
+  await closePoolOnce();
 }
