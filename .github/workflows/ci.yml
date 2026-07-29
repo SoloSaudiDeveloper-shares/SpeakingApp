@@ -42,7 +42,7 @@ jobs:
           docker run --detach --name azurite --publish 10000:10000 \
             mcr.microsoft.com/azure-storage/azurite:3.36.0 \
             azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             if curl --silent --output /dev/null http://127.0.0.1:10000/devstoreaccount1?comp=list; then
               exit 0
             fi
@@ -93,14 +93,19 @@ jobs:
       - name: Generate CI-only account passwords
         shell: bash
         run: |
-          echo "DEMO_ADMIN_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
-          echo "DEMO_TEACHER_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
-          echo "DEMO_STUDENT_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
-          echo "MIGRATION_BOOTSTRAP_ADMIN_PASSWORD=$(openssl rand -base64 24)" >> "$GITHUB_ENV"
+          {
+            echo "DEMO_ADMIN_PASSWORD=$(openssl rand -base64 24)"
+            echo "DEMO_TEACHER_PASSWORD=$(openssl rand -base64 24)"
+            echo "DEMO_STUDENT_PASSWORD=$(openssl rand -base64 24)"
+            echo "MIGRATION_BOOTSTRAP_ADMIN_PASSWORD=$(openssl rand -base64 24)"
+          } >> "$GITHUB_ENV"
 
       - name: Runtime dependency gate
         working-directory: web
         run: npm audit --omit=dev --audit-level=high
+
+      - name: Validate Azure Bicep
+        run: az bicep build --file infra/main.bicep --outfile "${RUNNER_TEMP}/speaking-lab-main.json"
 
       - name: Migrate, seed, and check PostgreSQL
         working-directory: web
@@ -130,9 +135,9 @@ jobs:
                   WHERE key ~* '(^|_)(api_?key|secret|password|passwd|token|credential|private_?key|connection_?string)(_|$)') = 0
             ")"
           test "$import_security" = "t"
-          ! grep --fixed-strings 'configured-provider-value' /tmp/sqlite-reconciliation.json
-          ! grep --fixed-strings 'unknown-secret-value' /tmp/sqlite-reconciliation.json
-          ! grep --fixed-strings "$MIGRATION_BOOTSTRAP_ADMIN_PASSWORD" /tmp/sqlite-reconciliation.json
+          if grep --fixed-strings 'configured-provider-value' /tmp/sqlite-reconciliation.json; then exit 1; fi
+          if grep --fixed-strings 'unknown-secret-value' /tmp/sqlite-reconciliation.json; then exit 1; fi
+          if grep --fixed-strings "$MIGRATION_BOOTSTRAP_ADMIN_PASSWORD" /tmp/sqlite-reconciliation.json; then exit 1; fi
           cp /tmp/sqlite-reconciliation.json sqlite-reconciliation.json
 
       - name: Typecheck and unit tests
@@ -168,9 +173,9 @@ jobs:
 
       - name: Build and inspect production image
         run: |
-          docker build -t speaking-lab:${GITHUB_SHA} .
-          docker history --no-trunc speaking-lab:${GITHUB_SHA} > image-history.txt
-          docker run --rm --entrypoint sh speaking-lab:${GITHUB_SHA} -c '
+          docker build -t "speaking-lab:${GITHUB_SHA}" .
+          docker history --no-trunc "speaking-lab:${GITHUB_SHA}" > image-history.txt
+          docker run --rm --entrypoint sh "speaking-lab:${GITHUB_SHA}" -c '
             if find /app \( -iname "*sqlite*" -o -iname "*electron*" -o -name "*.db" -o -name ".env*" \) | grep -q .; then
               exit 1
             fi

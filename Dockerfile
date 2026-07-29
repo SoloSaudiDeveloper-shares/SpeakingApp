@@ -4,18 +4,13 @@ WORKDIR /app/web
 ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 FROM deps AS builder
 WORKDIR /app/web
 ENV SPEAKING_LAB_SKIP_DB_INIT=1
 COPY web ./
 RUN npm run build
-
-FROM deps AS tools
-WORKDIR /app/web
-COPY web ./
-CMD ["npm", "run", "db:migrate"]
 
 FROM node:24-bookworm-slim AS jobs
 WORKDIR /app
@@ -31,7 +26,9 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends postgresql-client-17 \
   && rm -rf /var/lib/apt/lists/*
 COPY web/package.json web/package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --omit=optional \
+  && find node_modules/drizzle-orm -mindepth 1 -maxdepth 2 -type d -iname '*sqlite*' \
+    -prune -exec rm -rf {} +
 COPY web/drizzle ./drizzle
 COPY web/jobs ./jobs
 USER node

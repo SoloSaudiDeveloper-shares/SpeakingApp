@@ -14,10 +14,11 @@ const url = new URL(process.env.DATABASE_URL);
 const work = await mkdtemp(path.join(tmpdir(), 'speaking-backup-'));
 const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 const dump = path.join(work, `speaking-lab-${stamp}.dump`);
+const sslDisabled = process.env.DATABASE_SSL_MODE?.trim().toLowerCase() === 'disable';
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 1,
-  ssl: { rejectUnauthorized: true },
+  ssl: sslDisabled ? false : { rejectUnauthorized: true },
 });
 try {
   const audio = await pool.query(`
@@ -43,7 +44,11 @@ try {
       '--dbname', url.pathname.replace(/^\//, ''),
       '--format=custom', '--compress=9', '--no-owner', '--no-acl', '--file', dump,
     ], {
-      env: { ...process.env, PGPASSWORD: decodeURIComponent(url.password), PGSSLMODE: 'require' },
+      env: {
+        ...process.env,
+        PGPASSWORD: decodeURIComponent(url.password),
+        PGSSLMODE: sslDisabled ? 'disable' : 'require',
+      },
       stdio: 'inherit',
     });
     child.on('error', reject);

@@ -22,7 +22,7 @@
     "migrate:sqlite": "tsx scripts/migrate-sqlite.ts",
     "backup:data": "tsx scripts/backup-postgres.ts",
     "backup:restore-test": "tsx scripts/restore-postgres-test.ts",
-    "security:secrets": "gitleaks git --redact --no-banner",
+    "security:secrets": "gitleaks git --redact --no-banner --config ../.gitleaks.toml",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:learning-quality": "node scripts/learning-quality-check.mjs",

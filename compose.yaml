@@ -29,7 +29,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: tools
+      target: jobs
+    command: ["node", "/app/jobs/migrate.mjs"]
     environment:
       DATABASE_URL: postgresql://speaking:local-development-only@postgres:5432/speaking_lab
       DATABASE_SSL_MODE: disable
@@ -46,6 +47,7 @@ services:
       DATABASE_URL: postgresql://speaking:local-development-only@postgres:5432/speaking_lab
       DATABASE_SSL_MODE: disable
       SETTINGS_ENCRYPTION_KEY: local-compose-encryption-key-change-before-use
+      ALLOW_LOCAL_ENCRYPTED_SECRET_STORE: "true"
       AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=speaking;AccountKey=c3BlYWtpbmctbGFiLWxvY2FsLWF6dXJpdGUta2V5LTMy;BlobEndpoint=http://azurite:10000/speaking;"
       AZURE_AUDIO_CONTAINER: speaking-audio
       SESSION_COOKIE_SECURE: "false"
