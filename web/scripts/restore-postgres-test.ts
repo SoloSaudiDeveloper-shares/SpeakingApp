@@ -3,6 +3,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { Pool } from 'pg';
 import { postgresCommandConnection, run } from './postgres-cli';
+import { postgresSslConfig } from '../src/lib/db/ssl';
 
 function argument(name: string) {
   const index = process.argv.indexOf(name);
@@ -44,7 +45,11 @@ const original = new URL(databaseUrl);
 const maintenanceDatabase = process.env.POSTGRES_MAINTENANCE_DATABASE || 'postgres';
 const maintenanceUrl = new URL(original);
 maintenanceUrl.pathname = `/${maintenanceDatabase}`;
-const admin = new Pool({ connectionString: maintenanceUrl.toString(), max: 1 });
+const admin = new Pool({
+  connectionString: maintenanceUrl.toString(),
+  max: 1,
+  ssl: postgresSslConfig(),
+});
 const testDatabase = `speaking_restore_${randomBytes(6).toString('hex')}`;
 try {
   await admin.query(`CREATE DATABASE "${testDatabase}"`);
@@ -58,7 +63,11 @@ try {
   ], connection.env);
   const restoredUrl = new URL(original);
   restoredUrl.pathname = `/${testDatabase}`;
-  const restored = new Pool({ connectionString: restoredUrl.toString(), max: 1 });
+  const restored = new Pool({
+    connectionString: restoredUrl.toString(),
+    max: 1,
+    ssl: postgresSslConfig(),
+  });
   try {
     const tables = await restored.query<{ count: number }>(`
       SELECT COUNT(*)::int AS count FROM information_schema.tables

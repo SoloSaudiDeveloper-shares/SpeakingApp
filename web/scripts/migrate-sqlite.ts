@@ -9,6 +9,7 @@ import {
   isSecretLikeSettingKey,
   PROVIDER_SECRET_SETTING_KEYS,
 } from '../src/lib/secrets/sensitive-setting';
+import { postgresSslConfig } from '../src/lib/db/ssl';
 
 const TABLE_ORDER = [
   'books', 'students', 'user_accounts', 'app_settings', 'badges',
@@ -48,7 +49,11 @@ const integrity = sqlite.pragma('integrity_check') as Array<{ integrity_check: s
 if (integrity.length !== 1 || integrity[0]?.integrity_check !== 'ok') {
   throw new Error('SQLite integrity_check failed.');
 }
-const postgres = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+const postgres = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 2,
+  ssl: postgresSslConfig(),
+});
 const report = {
   source: sourcePath,
   startedAt: new Date().toISOString(),
@@ -119,7 +124,10 @@ function transformValue(value: unknown, column: ColumnInfo) {
 
 async function insertRows(client: PoolClient, table: string, sourceRows: SqliteRow[]) {
   const columns = await targetColumns(client, table);
+  const columnByName = new Map(columns.map((column) => [column.column_name, column]));
+  const groupedRows = new Map<string, Array<{ names: string[]; values: unknown[] }>>();
   let imported = 0;
+
   for (const sourceRow of sourceRows) {
     const row = { ...sourceRow };
     if (table === 'user_accounts' && weakPassword(row.password_hash)) {
@@ -144,13 +152,37 @@ async function insertRows(client: PoolClient, table: string, sourceRows: SqliteR
     const usable = columns.filter((column) => rowColumns.has(column.column_name));
     const names = usable.map((column) => `"${column.column_name}"`);
     const values = usable.map((column) => transformValue(row[column.column_name], column));
-    const placeholders = values.map((_, index) => `$${index + 1}`);
-    await client.query(
-      `INSERT INTO "${table}" (${names.join(',')}) VALUES (${placeholders.join(',')})`,
-      values,
-    );
-    imported += 1;
+    const signature = usable.map((column) => column.column_name).join('\u001f');
+    const group = groupedRows.get(signature) ?? [];
+    group.push({ names, values });
+    groupedRows.set(signature, group);
   }
+
+  for (const [signature, rows] of groupedRows) {
+    if (rows.length === 0) continue;
+    const columnNames = signature.split('\u001f');
+    const quotedNames = columnNames.map((name) => {
+      if (!columnByName.has(name)) throw new Error(`Unknown target column ${table}.${name}.`);
+      return `"${name.replaceAll('"', '""')}"`;
+    });
+    // PostgreSQL supports at most 65,535 bind parameters. Staying below
+    // 60,000 also keeps each remote TLS request to a manageable size.
+    const batchSize = Math.max(1, Math.min(250, Math.floor(60_000 / columnNames.length)));
+    for (let start = 0; start < rows.length; start += batchSize) {
+      const batch = rows.slice(start, start + batchSize);
+      const parameters = batch.flatMap((row) => row.values);
+      const tuples = batch.map((row, rowIndex) => {
+        const offset = rowIndex * row.values.length;
+        return `(${row.values.map((_, valueIndex) => `$${offset + valueIndex + 1}`).join(',')})`;
+      });
+      await client.query(
+        `INSERT INTO "${table}" (${quotedNames.join(',')}) VALUES ${tuples.join(',')}`,
+        parameters,
+      );
+      imported += batch.length;
+    }
+  }
+
   return imported;
 }
 
@@ -271,6 +303,7 @@ try {
       excluded += before - rows.length;
     }
     const imported = await insertRows(client, table, rows);
+    console.log(`[migrate:sqlite] ${table}: imported ${imported}, excluded ${excluded}.`);
     report.tables[table] = {
       source: rows.length + excluded,
       imported,

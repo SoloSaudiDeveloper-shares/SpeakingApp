@@ -12,7 +12,14 @@ export function postgresCommandConnection(databaseUrl: string, databaseOverride?
     env: {
       ...process.env,
       PGPASSWORD: decodeURIComponent(url.password),
-      PGSSLMODE: process.env.DATABASE_SSL_MODE === 'disable' ? 'disable' : 'require',
+      PGSSLMODE:
+        process.env.DATABASE_SSL_MODE === 'disable'
+          ? 'disable'
+          : 'verify-full',
+      ...(process.env.DATABASE_SSL_MODE === 'disable' ||
+      !process.env.DATABASE_SSL_CA_PATH
+        ? {}
+        : { PGSSLROOTCERT: process.env.DATABASE_SSL_CA_PATH }),
     },
   };
 }

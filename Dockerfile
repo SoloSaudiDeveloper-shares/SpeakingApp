@@ -31,6 +31,9 @@ RUN npm ci --omit=dev --omit=optional \
     -prune -exec rm -rf {} +
 COPY web/drizzle ./drizzle
 COPY web/jobs ./jobs
+COPY --chown=node:node certs ./certs
+ENV NODE_EXTRA_CA_CERTS=/app/certs/supabase-prod-ca-2021.pem
+ENV DATABASE_SSL_CA_PATH=/app/certs/supabase-prod-ca-2021.pem
 USER node
 
 FROM node:24-bookworm-slim AS runner
@@ -48,6 +51,9 @@ RUN apt-get update \
 COPY --from=builder --chown=node:node /app/web/.next/standalone ./
 COPY --from=builder --chown=node:node /app/web/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/web/public ./public
+COPY --chown=node:node certs ./certs
+ENV NODE_EXTRA_CA_CERTS=/app/certs/supabase-prod-ca-2021.pem
+ENV DATABASE_SSL_CA_PATH=/app/certs/supabase-prod-ca-2021.pem
 
 EXPOSE 3000
 USER node

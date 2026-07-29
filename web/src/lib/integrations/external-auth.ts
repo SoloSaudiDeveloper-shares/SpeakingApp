@@ -82,9 +82,16 @@ function normalizeRole(role: string): ExternalRole | null {
 }
 
 function base64UrlDecode(input: string): Buffer {
+  if (!/^[A-Za-z0-9_-]+$/.test(input)) {
+    throw new Error('Invalid base64url input.');
+  }
   const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
   const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
-  return Buffer.from(padded, 'base64');
+  const decoded = Buffer.from(padded, 'base64');
+  if (base64UrlEncode(decoded) !== input) {
+    throw new Error('Non-canonical base64url input.');
+  }
+  return decoded;
 }
 
 function base64UrlEncode(input: Buffer | string): string {

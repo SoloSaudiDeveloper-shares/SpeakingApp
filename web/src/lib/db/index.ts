@@ -1,6 +1,7 @@
 import { Pool, type PoolConfig } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from './schema';
+import { postgresSslConfig } from './ssl';
 
 type DatabaseGlobals = typeof globalThis & {
   __speakingLabPgPool?: Pool;
@@ -24,14 +25,6 @@ function poolConfig(): PoolConfig {
     throw new Error('DATABASE_URL is required for the PostgreSQL runtime.');
   }
 
-  const sslMode = process.env.DATABASE_SSL_MODE?.trim().toLowerCase();
-  const ssl =
-    sslMode === 'disable'
-      ? false
-      : sslMode === 'require' || process.env.NODE_ENV === 'production'
-        ? { rejectUnauthorized: true }
-        : undefined;
-
   return {
     // Build-time imports must not connect. Any accidental build-time query
     // fails quickly instead of touching a developer or production database.
@@ -50,7 +43,7 @@ function poolConfig(): PoolConfig {
       15_000,
     ),
     application_name: process.env.XAPI_SOURCE_APP || 'speaking-lab',
-    ssl,
+    ssl: postgresSslConfig(),
   };
 }
 

@@ -96,14 +96,13 @@ export async function enqueueXapiForKlpResult(attemptKlpResultId: number, kind: 
     } },
     timestamp: row.createdAt,
   };
-  const now = new Date().toISOString();
   await pool.query(`
     INSERT INTO xapi_outbox(
       statement_id, attempt_klp_result_id, student_id, actor_subject, verb, statement_json,
       status, attempts, next_attempt_at, created_at, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'pending', 0, $7, $7, $7)
+    ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'pending', 0, now(), now(), now())
     ON CONFLICT (statement_id) DO NOTHING
-  `, [statementId, row.id, row.studentId, actorSubject, kind, JSON.stringify(statement), now]);
+  `, [statementId, row.id, row.studentId, actorSubject, kind, JSON.stringify(statement)]);
   return statementId;
 }
 

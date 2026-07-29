@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DefaultAzureCredential } from '@azure/identity';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { Pool } from 'pg';
+import { postgresSslConfig } from './pg-ssl.mjs';
 
 if (!process.env.DATABASE_URL || !process.env.AZURE_STORAGE_ACCOUNT_URL) {
   throw new Error('DATABASE_URL and AZURE_STORAGE_ACCOUNT_URL are required.');
@@ -18,7 +19,7 @@ const sslDisabled = process.env.DATABASE_SSL_MODE?.trim().toLowerCase() === 'dis
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 1,
-  ssl: sslDisabled ? false : { rejectUnauthorized: true },
+  ssl: postgresSslConfig(),
 });
 try {
   const audio = await pool.query(`
@@ -47,7 +48,10 @@ try {
       env: {
         ...process.env,
         PGPASSWORD: decodeURIComponent(url.password),
-        PGSSLMODE: sslDisabled ? 'disable' : 'require',
+        PGSSLMODE: sslDisabled ? 'disable' : 'verify-full',
+        ...(sslDisabled || !process.env.DATABASE_SSL_CA_PATH
+          ? {}
+          : { PGSSLROOTCERT: process.env.DATABASE_SSL_CA_PATH }),
       },
       stdio: 'inherit',
     });

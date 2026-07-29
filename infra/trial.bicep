@@ -138,7 +138,8 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
           env: [
             { name: 'NODE_ENV', value: 'production' }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
-            { name: 'DATABASE_SSL_MODE', value: 'require' }
+            { name: 'DATABASE_SSL_MODE', value: 'verify-full' }
+            { name: 'DATABASE_SSL_CA_PATH', value: '/app/certs/supabase-prod-ca-2021.pem' }
             { name: 'DB_POOL_MAX', value: '3' }
             { name: 'AZURE_KEY_VAULT_URL', value: vault.properties.vaultUri }
             { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${az.environment().suffixes.storage}' }
@@ -214,7 +215,11 @@ resource migrationJob 'Microsoft.App/jobs@2025-01-01' = {
           name: 'migration'
           image: jobsImage
           command: ['node', '/app/jobs/migrate.mjs']
-          env: [{ name: 'DATABASE_URL', secretRef: 'database-url' }]
+          env: [
+            { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'DATABASE_SSL_MODE', value: 'verify-full' }
+            { name: 'DATABASE_SSL_CA_PATH', value: '/app/certs/supabase-prod-ca-2021.pem' }
+          ]
           resources: { cpu: json('0.5'), memory: '1Gi' }
         }
       ]
@@ -287,6 +292,8 @@ resource backupJob 'Microsoft.App/jobs@2025-01-01' = {
           command: ['node', '/app/jobs/backup.mjs']
           env: [
             { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'DATABASE_SSL_MODE', value: 'verify-full' }
+            { name: 'DATABASE_SSL_CA_PATH', value: '/app/certs/supabase-prod-ca-2021.pem' }
             { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${az.environment().suffixes.storage}' }
             { name: 'AZURE_BACKUP_CONTAINER', value: backupContainerName }
             { name: 'AZURE_AUDIO_CONTAINER', value: audioContainerName }
