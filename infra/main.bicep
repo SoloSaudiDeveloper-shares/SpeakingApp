@@ -414,6 +414,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'DATABASE_SSL_MODE', value: 'verify-full' }
             { name: 'DB_POOL_MAX', value: '5' }
+            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'AZURE_KEY_VAULT_URL', value: vault.properties.vaultUri }
             { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${az.environment().suffixes.storage}' }
             { name: 'AZURE_AUDIO_CONTAINER', value: audioContainer.name }
@@ -569,6 +570,7 @@ resource backupJob 'Microsoft.App/jobs@2025-01-01' = {
           env: [
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'DATABASE_SSL_MODE', value: 'verify-full' }
+            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${az.environment().suffixes.storage}' }
             { name: 'AZURE_BACKUP_CONTAINER', value: backupContainer.name }
             { name: 'AZURE_AUDIO_CONTAINER', value: audioContainer.name }
