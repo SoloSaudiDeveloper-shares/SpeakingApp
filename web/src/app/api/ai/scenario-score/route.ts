@@ -9,6 +9,14 @@ import { applyLocalScenarioGuard, heuristicScenarioGrade } from '@/lib/ai/scenar
 import type { ScenarioGrade } from '@/lib/ai/scenario-grading';
 import { after } from 'next/server';
 import { drainXapiOutbox } from '@/lib/integrations/xapi';
+import { jsonBodyErrorResponse, readBoundedJson } from '@/lib/security/request-body';
+import {
+  consumeCloudAiBudgetIfNeeded,
+  consumePracticeAttemptBudget,
+  ResourceBudgetExceededError,
+  resourceBudgetResponse,
+} from '@/lib/security/resource-budget-server';
+import { mutationRequestViolation } from '@/lib/security/request-protection';
 
 const SCENARIO_GRADER_TIMEOUT_MS = 15000;
 
@@ -20,17 +28,35 @@ const SCENARIO_GRADER_TIMEOUT_MS = 15000;
  */
 export async function POST(request: Request) {
   try {
+    const violation = mutationRequestViolation(request);
+    if (violation) return Response.json({ error: 'Request is not allowed.' }, { status: 403 });
     const cookieStore = await cookies();
     const token = cookieStore.get('session-token')?.value;
     if (!token) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
     const user = await getSessionFromToken(token);
     if (!user) return Response.json({ error: 'Session expired.' }, { status: 401 });
 
-    const body = await request.json();
-    const scenario = getScenario(body.scenarioId) ?? await getGeneratedScenario(body.scenarioId);
+    const rawBody = await readBoundedJson(request, 128 * 1024);
+    if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
+      return Response.json({ error: 'Request body must be a JSON object.' }, { status: 400 });
+    }
+    const body = rawBody as Record<string, unknown>;
+    const scenarioId = typeof body.scenarioId === 'string' ? body.scenarioId : '';
+    const scenario = getScenario(scenarioId) ?? await getGeneratedScenario(scenarioId);
     if (!scenario) return Response.json({ error: 'Unknown scenario.' }, { status: 400 });
 
-    const messages: { role: 'user' | 'assistant'; content: string }[] = Array.isArray(body.messages) ? body.messages : [];
+    const messages: { role: 'user' | 'assistant'; content: string }[] = Array.isArray(body.messages)
+      ? body.messages.slice(-32).flatMap((message) => {
+          if (!message || typeof message !== 'object') return [];
+          const item = message as Record<string, unknown>;
+          if (item.role !== 'user' && item.role !== 'assistant') return [];
+          if (typeof item.content !== 'string' || item.content.length > 8_000) return [];
+          return [{ role: item.role, content: item.content }];
+        })
+      : [];
+    if (messages.reduce((total, message) => total + message.content.length, 0) > 64_000) {
+      return Response.json({ error: 'Scenario transcript is too large.' }, { status: 400 });
+    }
     const sessionId = typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : nanoid(32);
     const persistMode: 'always' | 'auto' | 'never' =
       body.persistMode === 'auto' || body.persistMode === 'never'
@@ -61,6 +87,7 @@ export async function POST(request: Request) {
 
     let parsed: ScenarioGrade;
     try {
+      await consumeCloudAiBudgetIfNeeded(user.id);
       const result = await withTimeout(
         callChat(
           [
@@ -78,10 +105,14 @@ export async function POST(request: Request) {
         messages,
       );
     } catch (e) {
+      if (e instanceof ResourceBudgetExceededError) {
+        parsed = heuristicScenarioGrade(scenario, messages);
+      } else {
       // If the provider is down, fall back to a local content-aware grade so
       // empty or off-task conversations do not get credit just for turn count.
-      console.warn('Scenario grader failed, using fallback:', e);
-      parsed = heuristicScenarioGrade(scenario, messages);
+        console.warn('Scenario grader failed, using fallback:', e);
+        parsed = heuristicScenarioGrade(scenario, messages);
+      }
     }
 
     const allGoalsMet = parsed.criteriaMet.length > 0 && parsed.criteriaMet.every(Boolean);
@@ -97,6 +128,7 @@ export async function POST(request: Request) {
     // Persist (best effort)
     if (shouldPersist && user.studentId) {
       try {
+        await consumePracticeAttemptBudget(user.id);
         const existing = await findScenarioAttemptBySession(sessionId);
         if (existing) {
           persisted = true;
@@ -122,7 +154,10 @@ export async function POST(request: Request) {
         after(() => drainXapiOutbox());
         persisted = true;
         }
-      } catch { /* ignore persistence errors */ }
+      } catch (error) {
+        if (error instanceof ResourceBudgetExceededError) throw error;
+        // Scenario grading can still be returned when optional persistence is unavailable.
+      }
     }
 
     return Response.json({
@@ -144,6 +179,10 @@ export async function POST(request: Request) {
       completionReason: persisted ? completionReason : null,
     });
   } catch (e) {
+    const bodyResponse = jsonBodyErrorResponse(e);
+    if (bodyResponse) return bodyResponse;
+    const budgetResponse = resourceBudgetResponse(e);
+    if (budgetResponse) return budgetResponse;
     console.error('scenario-score error:', e);
     return Response.json({ error: 'Internal server error.' }, { status: 500 });
   }

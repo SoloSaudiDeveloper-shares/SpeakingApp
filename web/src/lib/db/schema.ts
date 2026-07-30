@@ -142,6 +142,7 @@ export const practiceTasks = pgTable('practice_tasks', {
 export const attempts = pgTable('attempts', {
   id: integer('id').primaryKey().generatedByDefaultAsIdentity(),
   studentId: integer('student_id').notNull().references(() => students.id),
+  clientSubmissionId: text('client_submission_id'),
   cycleId: integer('cycle_id').notNull().references(() => cycles.id),
   bookId: integer('book_id').notNull().references(() => books.id),
   practiceTaskId: integer('practice_task_id').notNull().references(() => practiceTasks.id),
@@ -159,7 +160,10 @@ export const attempts = pgTable('attempts', {
   teacherNotes: text('teacher_notes'),
   // Additive (Phase 0): rich fluency metrics JSON (also persists audio duration)
   metricsJson: jsonbText('metrics_json'),
-});
+}, (table) => ({
+  studentSubmissionIdx: uniqueIndex('attempts_student_submission_idx')
+    .on(table.studentId, table.clientSubmissionId),
+}));
 
 // Sanitized speech pipeline telemetry. This stores operational reliability
 // signals only; never store raw audio, raw transcripts, keys, or provider bodies.
@@ -168,7 +172,7 @@ export const speechReliabilityEvents = pgTable('speech_reliability_events', {
   studentId: integer('student_id').references(() => students.id, { onDelete: 'set null' }),
   userId: integer('user_id'),
   className: text('class_name'),
-  eventType: text('event_type').notNull(), // stt | pronunciation | recording
+  eventType: text('event_type').notNull(), // stt | pronunciation | recording | tts
   provider: text('provider').notNull(),
   route: text('route').notNull(),
   practiceStage: text('practice_stage'),
@@ -262,6 +266,69 @@ export const appSecrets = pgTable('app_secrets', {
   encryptedValue: text('encrypted_value').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
 });
+
+// Organization-level paid TTS quota counters. Reservations are performed with
+// a single conditional UPSERT so concurrent replicas cannot exceed a cap.
+export const ttsProviderUsage = pgTable('tts_provider_usage', {
+  provider: text('provider').notNull(),
+  periodMonth: text('period_month').notNull(),
+  characters: integer('characters').notNull().default(0),
+  requestCount: integer('request_count').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
+}, (table) => ({
+  providerMonthIdx: uniqueIndex('tts_provider_usage_provider_month_idx')
+    .on(table.provider, table.periodMonth),
+}));
+
+// Database-backed minute windows keep learner rate limits consistent when
+// Container Apps scales beyond one web replica.
+export const ttsRateLimitWindows = pgTable('tts_rate_limit_windows', {
+  userId: integer('user_id').notNull().references(() => userAccounts.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(),
+  windowStartedAt: timestamp('window_started_at', { withTimezone: true, mode: 'string' }).notNull(),
+  requestCount: integer('request_count').notNull().default(0),
+}, (table) => ({
+  userProviderWindowIdx: uniqueIndex('tts_rate_limit_user_provider_window_idx')
+    .on(table.userId, table.provider, table.windowStartedAt),
+}));
+
+// Shared fixed-window counters for unauthenticated abuse controls. Subjects
+// are application-keyed HMACs, so raw IP addresses, origins, and usernames are
+// not persisted.
+export const securityRateLimitWindows = pgTable('security_rate_limit_windows', {
+  scope: text('scope').notNull(),
+  subjectHash: text('subject_hash').notNull(),
+  windowStartedAt: timestamp('window_started_at', { withTimezone: true, mode: 'string' }).notNull(),
+  requestCount: integer('request_count').notNull().default(0),
+}, (table) => ({
+  scopeSubjectWindowIdx: uniqueIndex('security_rate_limit_scope_subject_window_idx')
+    .on(table.scope, table.subjectHash, table.windowStartedAt),
+}));
+
+// Per-user daily resource budgets are stored in PostgreSQL so multiple web
+// replicas share a single authoritative limit.
+export const userResourceUsage = pgTable('user_resource_usage', {
+  userId: integer('user_id').notNull().references(() => userAccounts.id, { onDelete: 'cascade' }),
+  resource: text('resource').notNull(),
+  periodDay: date('period_day', { mode: 'string' }).notNull(),
+  units: integer('units').notNull().default(0),
+  requestCount: integer('request_count').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
+}, (table) => ({
+  userResourceDayIdx: uniqueIndex('user_resource_usage_user_resource_day_idx')
+    .on(table.userId, table.resource, table.periodDay),
+}));
+
+export const organizationResourceUsage = pgTable('organization_resource_usage', {
+  resource: text('resource').notNull(),
+  periodDay: date('period_day', { mode: 'string' }).notNull(),
+  units: integer('units').notNull().default(0),
+  requestCount: integer('request_count').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
+}, (table) => ({
+  resourceDayIdx: uniqueIndex('organization_resource_usage_resource_day_idx')
+    .on(table.resource, table.periodDay),
+}));
 
 // TeacherFlags
 export const teacherFlags = pgTable('teacher_flags', {

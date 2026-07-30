@@ -4,6 +4,8 @@
 
 This guide explains how SAIF launches a pseudonymous learner into Speaking Lab and
 how Speaking Lab returns assessed, KLP-addressed speaking evidence through xAPI.
+The focused, code-oriented handoff for the SAIF programmer is
+[`SAIF_PROGRAMMER_IMPLEMENTATION_GUIDE.md`](./SAIF_PROGRAMMER_IMPLEMENTATION_GUIDE.md).
 It does not replace the pinned contracts:
 
 - [`HANDOVER.md`](./HANDOVER.md)
@@ -113,6 +115,8 @@ Rules enforced by Speaking Lab:
 - HS256 only.
 - Exact configured issuer and audience.
 - `sub`, `role`, `displayName`, `iat`, `exp`, and `jti` are required.
+- `iat` and `exp` are integer Unix seconds, `exp` must be later than `iat`, and
+  the declared lifetime may not exceed 120 seconds.
 - The token may be no more than 120 seconds old and no more than 30 seconds in
   the future. A 60-second expiry is recommended.
 - A `(provider, jti)` pair is accepted once. Reservation and account/session
@@ -311,8 +315,9 @@ With both systems pointed at sandbox services:
 
 1. Launch one pseudonymous fixture learner from SAIF.
 2. Confirm direct login and SAIF launch resolve to one Speaking Lab account.
-3. In Speaking Lab's actor-map view, confirm the account IFI contains only the
-   expected homepage and signed `sub`.
+3. With a Speaking Lab Admin session, call
+   `GET /api/admin/integrations/xapi/actor-map` and confirm the account IFI
+   contains only the expected homepage and signed `sub`.
 4. Complete one assessed activity mapped to one approved sandbox KLP.
 5. Confirm one pending outbox statement and inspect its actor, verb, object,
    score, source, and deterministic ID.

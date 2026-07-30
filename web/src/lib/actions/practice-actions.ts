@@ -61,6 +61,7 @@ export function masteryStatusFor(bestScore: number, latestScore: number, timesSp
 
 export async function recordAttempt(data: {
   studentId: number;
+  clientSubmissionId?: string;
   cycleId: number;
   bookId: number;
   practiceTaskId: number;
@@ -74,56 +75,78 @@ export async function recordAttempt(data: {
   compositeScore: number;
   metricsJson?: string;
 }) {
-  const row = ((await db
-    .insert(attempts)
-    .values({
-      ...data,
-      timestamp: new Date().toISOString(),
-    })
-    .returning())[0]);
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(attempts)
+      .values({
+        ...data,
+        clientSubmissionId: data.clientSubmissionId ?? null,
+        timestamp: new Date().toISOString(),
+      })
+      .onConflictDoNothing({
+        target: [attempts.studentId, attempts.clientSubmissionId],
+      })
+      .returning();
 
-  // Update word mastery
-  const task = ((await db
-    .select()
-    .from(practiceTasks)
-    .where(eq(practiceTasks.id, data.practiceTaskId)).limit(1))[0]);
+    if (!row) {
+      if (!data.clientSubmissionId) throw new Error('Attempt could not be created.');
+      const existingAttempt = (await tx
+        .select()
+        .from(attempts)
+        .where(and(
+          eq(attempts.studentId, data.studentId),
+          eq(attempts.clientSubmissionId, data.clientSubmissionId),
+        ))
+        .limit(1))[0];
+      if (!existingAttempt) throw new Error('Idempotent attempt could not be resolved.');
+      return { ...existingAttempt, idempotentReplay: true };
+    }
 
-  if (task?.vocabularyItemId) {
-    const existing = ((await db
+    // Attempt creation and mastery changes are one transaction. An idempotent
+    // replay returns above, so it cannot increment mastery twice.
+    const task = (await tx
       .select()
-      .from(wordMasteryRecords)
-      .where(
-        and(
-          eq(wordMasteryRecords.studentId, data.studentId),
-          eq(wordMasteryRecords.vocabularyItemId, task.vocabularyItemId),
-          eq(wordMasteryRecords.cycleId, data.cycleId)
-        )
-      ).limit(1))[0]);
+      .from(practiceTasks)
+      .where(eq(practiceTasks.id, data.practiceTaskId))
+      .limit(1))[0];
 
-    if (existing) {
-      const newBest = Math.max(existing.bestScore, data.compositeScore);
-      const newTimesSpoken = existing.timesSpoken + 1;
-      const status = masteryStatusFor(newBest, data.compositeScore, newTimesSpoken);
-
-      (await db.update(wordMasteryRecords)
-        .set({
-          timesSpoken: newTimesSpoken,
-          bestScore: newBest,
-          latestScore: data.compositeScore,
-          masteryStatus: status,
-        })
+    if (task?.vocabularyItemId) {
+      const existing = (await tx
+        .select()
+        .from(wordMasteryRecords)
         .where(
           and(
             eq(wordMasteryRecords.studentId, data.studentId),
             eq(wordMasteryRecords.vocabularyItemId, task.vocabularyItemId),
-            eq(wordMasteryRecords.cycleId, data.cycleId)
+            eq(wordMasteryRecords.cycleId, data.cycleId),
           )
-        ));
-    } else {
-      const status = masteryStatusFor(data.compositeScore, data.compositeScore, 1);
+        )
+        .limit(1))[0];
 
-      (await db.insert(wordMasteryRecords)
-        .values({
+      if (existing) {
+        const newBest = Math.max(existing.bestScore, data.compositeScore);
+        const newTimesSpoken = existing.timesSpoken + 1;
+        const status = masteryStatusFor(newBest, data.compositeScore, newTimesSpoken);
+
+        await tx
+          .update(wordMasteryRecords)
+          .set({
+            timesSpoken: newTimesSpoken,
+            bestScore: newBest,
+            latestScore: data.compositeScore,
+            masteryStatus: status,
+          })
+          .where(
+            and(
+              eq(wordMasteryRecords.studentId, data.studentId),
+              eq(wordMasteryRecords.vocabularyItemId, task.vocabularyItemId),
+              eq(wordMasteryRecords.cycleId, data.cycleId),
+            ),
+          );
+      } else {
+        const status = masteryStatusFor(data.compositeScore, data.compositeScore, 1);
+
+        await tx.insert(wordMasteryRecords).values({
           studentId: data.studentId,
           vocabularyItemId: task.vocabularyItemId,
           cycleId: data.cycleId,
@@ -132,11 +155,12 @@ export async function recordAttempt(data: {
           bestScore: data.compositeScore,
           latestScore: data.compositeScore,
           masteryStatus: status,
-        }));
+        });
+      }
     }
-  }
 
-  return row;
+    return { ...row, idempotentReplay: false };
+  });
 }
 
 export async function getWordMastery(studentId: number, cycleId: number) {

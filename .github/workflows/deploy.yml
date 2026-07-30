@@ -7,9 +7,9 @@ on:
     types: [completed]
 
 permissions:
+  actions: read
   contents: read
   id-token: write
-  packages: write
 
 concurrency:
   group: speaking-lab-production
@@ -23,12 +23,30 @@ jobs:
     env:
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Require the production delivery gate configuration
+        env:
+          AZURE_DELIVERY_PROBE_JOB: ${{ vars.AZURE_DELIVERY_PROBE_JOB }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$AZURE_DELIVERY_PROBE_JOB" ]; then
+            echo "::error::AZURE_DELIVERY_PROBE_JOB must name the mandatory production delivery probe."
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - uses: azure/login@v2
+      - name: Download the exact artifacts from the successful release-gates run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-images-${{ github.event.workflow_run.head_sha }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: azure/login@1384c340ab2dda50fed2bee3041d1d87018aa5e8 # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -39,28 +57,39 @@ jobs:
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           {
-            echo "APP_IMAGE=ghcr.io/${owner}/speaking-lab:${RELEASE_SHA}"
-            echo "JOBS_IMAGE=ghcr.io/${owner}/speaking-lab-jobs:${RELEASE_SHA}"
+            echo "APP_IMAGE_REPO=ghcr.io/${owner}/speaking-lab"
+            echo "JOBS_IMAGE_REPO=ghcr.io/${owner}/speaking-lab-jobs"
             echo "OLD_IMAGE=$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_CONTAINER_APP }}' --query 'properties.template.containers[0].image' -o tsv)"
+            echo "OLD_COMMIT_SHA=$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_CONTAINER_APP }}' --query \"properties.template.containers[0].env[?name=='APP_COMMIT_SHA'].value | [0]\" -o tsv)"
             echo "OLD_MIGRATION_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_MIGRATION_JOB }}' --query 'properties.template.containers[0].image' -o tsv)"
             echo "OLD_BACKUP_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_BACKUP_JOB }}' --query 'properties.template.containers[0].image' -o tsv)"
-            echo "OLD_XAPI_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_XAPI_JOB }}' --query 'properties.template.containers[0].image' -o tsv)"
+            echo "OLD_DELIVERY_PROBE_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_DELIVERY_PROBE_JOB }}' --query 'properties.template.containers[0].image' -o tsv)"
           } >> "$GITHUB_ENV"
+          if [ -n '${{ vars.AZURE_XAPI_JOB }}' ]; then
+            echo "OLD_XAPI_IMAGE=$(az containerapp job show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_XAPI_JOB }}' --query 'properties.template.containers[0].image' -o tsv)" >> "$GITHUB_ENV"
+          fi
 
-      - name: Authenticate to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish immutable application and jobs images
+      - name: Resolve the already-verified immutable image digests
         shell: bash
         run: |
-          docker build --target runner -t "$APP_IMAGE" .
-          docker build --target jobs -t "$JOBS_IMAGE" .
-          docker push "$APP_IMAGE"
-          docker push "$JOBS_IMAGE"
+          set -euo pipefail
+          sha256sum --check verified-images.sha256
+          gzip -dc verified-app-image.tar.gz | docker load
+          gzip -dc verified-jobs-image.tar.gz | docker load
+          verified_app_id="$(docker image inspect --format='{{.Id}}' "speaking-lab:${RELEASE_SHA}")"
+          verified_jobs_id="$(docker image inspect --format='{{.Id}}' "speaking-lab-jobs:${RELEASE_SHA}")"
+          # Container Apps has no GHCR credentials by design. Anonymous pulls
+          # here prove the packages are public before any Azure state changes.
+          docker pull "${APP_IMAGE_REPO}:${RELEASE_SHA}"
+          docker pull "${JOBS_IMAGE_REPO}:${RELEASE_SHA}"
+          published_app_id="$(docker image inspect --format='{{.Id}}' "${APP_IMAGE_REPO}:${RELEASE_SHA}")"
+          published_jobs_id="$(docker image inspect --format='{{.Id}}' "${JOBS_IMAGE_REPO}:${RELEASE_SHA}")"
+          test "$verified_app_id" = "$published_app_id"
+          test "$verified_jobs_id" = "$published_jobs_id"
+          {
+            echo "APP_IMAGE=$(docker inspect --format='{{index .RepoDigests 0}}' "${APP_IMAGE_REPO}:${RELEASE_SHA}")"
+            echo "JOBS_IMAGE=$(docker inspect --format='{{index .RepoDigests 0}}' "${JOBS_IMAGE_REPO}:${RELEASE_SHA}")"
+          } >> "$GITHUB_ENV"
 
       - name: Point backup and migration jobs at the immutable image
         shell: bash
@@ -99,10 +128,18 @@ jobs:
           exit 1
 
       - name: Update the scheduled xAPI worker after migration
+        if: vars.AZURE_XAPI_JOB != ''
         shell: bash
         run: |
           az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
             -n '${{ vars.AZURE_XAPI_JOB }}' \
+            --image "$JOBS_IMAGE"
+
+      - name: Update the scheduled delivery probe
+        shell: bash
+        run: |
+          az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_DELIVERY_PROBE_JOB }}' \
             --image "$JOBS_IMAGE"
 
       - name: Deploy and verify new revision
@@ -123,17 +160,56 @@ jobs:
           done
           exit 1
 
-      - name: Roll back application and job images after any failure
-        if: failure() || steps.rollout.outcome == 'failure'
+      - name: Exercise large-body and signed-model delivery before approval
+        if: steps.rollout.outcome == 'success'
+        id: delivery
+        continue-on-error: true
         shell: bash
         run: |
-          set +e
+          set -euo pipefail
+          execution="$(az containerapp job start -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_DELIVERY_PROBE_JOB }}' --query name -o tsv)"
+          for _ in {1..30}; do
+            status="$(az containerapp job execution show -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+              -n '${{ vars.AZURE_DELIVERY_PROBE_JOB }}' \
+              --job-execution-name "$execution" --query properties.status -o tsv)"
+            [ "$status" = "Succeeded" ] && exit 0
+            [ "$status" = "Failed" ] && exit 1
+            sleep 10
+          done
+          exit 1
+
+      - name: Roll back application and job images after any failure
+        if: failure() || steps.rollout.outcome == 'failure' || steps.delivery.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
           az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
-            -n '${{ vars.AZURE_CONTAINER_APP }}' --image "$OLD_IMAGE"
+            -n '${{ vars.AZURE_CONTAINER_APP }}' --image "$OLD_IMAGE" \
+            --set-env-vars "APP_COMMIT_SHA=${OLD_COMMIT_SHA}"
           az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
             -n '${{ vars.AZURE_MIGRATION_JOB }}' --image "$OLD_MIGRATION_IMAGE"
           az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
             -n '${{ vars.AZURE_BACKUP_JOB }}' --image "$OLD_BACKUP_IMAGE"
+          if [ -n '${{ vars.AZURE_XAPI_JOB }}' ]; then
+            az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+              -n '${{ vars.AZURE_XAPI_JOB }}' --image "$OLD_XAPI_IMAGE"
+          fi
           az containerapp job update -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
-            -n '${{ vars.AZURE_XAPI_JOB }}' --image "$OLD_XAPI_IMAGE"
+            -n '${{ vars.AZURE_DELIVERY_PROBE_JOB }}' --image "$OLD_DELIVERY_PROBE_IMAGE"
+          url="https://$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_CONTAINER_APP }}' --query properties.configuration.ingress.fqdn -o tsv)"
+          restored=false
+          for _ in {1..40}; do
+            active_image="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+              -n '${{ vars.AZURE_CONTAINER_APP }}' --query 'properties.template.containers[0].image' -o tsv)"
+            if [ "$active_image" = "$OLD_IMAGE" ] && \
+              curl --fail --silent --show-error "$url/api/health/ready" >/dev/null && \
+              curl --fail --silent --show-error "$url/" >/dev/null; then
+              restored=true
+              break
+            fi
+            sleep 10
+          done
+          test "$restored" = true
           exit 1

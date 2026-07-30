@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { speechReliabilityEvents, students } from '@/lib/db/schema';
 import type { ReportFilters } from '@/lib/actions/report-actions';
 
-export type SpeechReliabilityEventType = 'stt' | 'pronunciation' | 'recording';
+export type SpeechReliabilityEventType = 'stt' | 'pronunciation' | 'recording' | 'tts';
 
 export interface SpeechReliabilityEventInput {
   studentId?: number | null;
@@ -78,6 +78,13 @@ export interface SpeechReliabilityReport {
 type ReliabilityRow = typeof speechReliabilityEvents.$inferSelect;
 
 const BLOCKED_METADATA_KEYS = /transcript|audio|blob|file|key|token|secret|providerBody|raw/i;
+const SAFE_TTS_METADATA_KEYS = new Set([
+  'characters',
+  'audio_bytes',
+  'ttfb_ms',
+  'total_ms',
+  'stream_outcome',
+]);
 
 function sanitizeString(value: unknown, max = 120) {
   if (typeof value !== 'string') return null;
@@ -93,7 +100,7 @@ function sanitizeNumber(value: unknown) {
 function sanitizeMetadata(metadata: Record<string, unknown> | null | undefined) {
   const safe: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(metadata ?? {})) {
-    if (BLOCKED_METADATA_KEYS.test(key)) continue;
+    if (BLOCKED_METADATA_KEYS.test(key) && !SAFE_TTS_METADATA_KEYS.has(key)) continue;
     if (typeof value === 'string') safe[key] = value.slice(0, 160);
     else if (typeof value === 'number' || typeof value === 'boolean' || value === null) safe[key] = value;
   }

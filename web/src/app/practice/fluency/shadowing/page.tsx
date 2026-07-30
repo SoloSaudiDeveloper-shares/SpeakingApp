@@ -83,10 +83,13 @@ export default function ShadowingPage() {
     if (!sentence) return
     setSpeaking(true)
     const t0 = Date.now()
-    await speak(sentence)
-    refDurationRef.current = (Date.now() - t0) / 1000
-    setSpeaking(false)
-    setPhase("ready")
+    try {
+      await speak(sentence)
+      refDurationRef.current = (Date.now() - t0) / 1000
+    } finally {
+      setSpeaking(false)
+      setPhase("ready")
+    }
   }, [sentence])
 
   const startRecord = useCallback(async () => {

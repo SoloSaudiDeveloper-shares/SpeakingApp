@@ -1,30 +1,45 @@
-import { cookies } from 'next/headers';
-import { getSessionFromToken } from '@/lib/actions/auth-actions';
-import { downloadAudioObject } from '@/lib/storage/audio-storage';
+import {
+  getAuthorizedAttemptByAudioPath,
+  requireAuthenticated,
+} from '@/lib/auth/authorization';
+import { normalizeAudioObjectKey } from '@/lib/storage/audio-storage';
+import { audioObjectResponse } from '@/lib/storage/audio-response';
 
-export async function GET(
-  _request: Request,
+async function serve(
+  request: Request,
   { params }: { params: Promise<{ path: string[] }> },
+  head: boolean,
 ) {
   try {
-    const token = (await cookies()).get('session-token')?.value;
-    if (!token || !await getSessionFromToken(token)) {
-      return new Response('Not authenticated', { status: 401 });
-    }
+    const auth = await requireAuthenticated();
+    if (!auth.ok) return auth.response;
     const { path } = await params;
-    const object = await downloadAudioObject(path.join('/'));
-    return new Response(object.data, {
-      headers: {
-        'Content-Type': object.contentType,
-        'Content-Length': String(object.data.length),
-        'Cache-Control': 'private, max-age=300',
-      },
-    });
+    const key = normalizeAudioObjectKey(path.join('/'));
+    const authorized = await getAuthorizedAttemptByAudioPath(auth.user, key);
+    if (!authorized) return new Response('Not found', { status: 404 });
+    return audioObjectResponse(request, key, { head });
   } catch (error) {
     if ((error as { statusCode?: number }).statusCode === 404) {
       return new Response('Not found', { status: 404 });
     }
-    console.error('[audio] Download failed:', error instanceof Error ? error.message : 'unknown error');
+    console.error('[audio] Download failed.', {
+      statusCode: (error as { statusCode?: number }).statusCode ?? null,
+      errorType: error instanceof Error ? error.name : 'UnknownError',
+    });
     return new Response('Audio unavailable', { status: 503 });
   }
+}
+
+export async function GET(
+  request: Request,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return serve(request, context, false);
+}
+
+export async function HEAD(
+  request: Request,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return serve(request, context, true);
 }

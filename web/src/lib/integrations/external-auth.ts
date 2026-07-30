@@ -55,6 +55,11 @@ export interface ExternalUserInput {
   classId?: string;
 }
 
+const MAX_LAUNCH_AGE_SECONDS = 120;
+const MAX_LAUNCH_LIFETIME_SECONDS = 120;
+const MAX_CLOCK_SKEW_SECONDS = 30;
+const MIN_SHARED_SECRET_LENGTH = 32;
+
 export class IntegrationError extends Error {
   status: number;
 
@@ -134,7 +139,11 @@ export function verifySignedLaunchToken(
   nowSec = Math.floor(Date.now() / 1000),
 ): ExternalLaunchPayload {
   if (!config.enabled) throw new IntegrationError('External SSO is disabled.', 503);
-  if (!config.sharedSecret || !config.issuer || !config.audience) {
+  if (
+    config.sharedSecret.length < MIN_SHARED_SECRET_LENGTH
+    || !config.issuer
+    || !config.audience
+  ) {
     throw new IntegrationError('External SSO is not fully configured.', 503);
   }
 
@@ -160,15 +169,37 @@ export function verifySignedLaunchToken(
 
   if (payload.iss !== config.issuer) throw new IntegrationError('Invalid launch token issuer.', 401);
   if (!isAudienceAllowed(payload.aud, config.audience)) throw new IntegrationError('Invalid launch token audience.', 401);
-  if (!payload.sub || !payload.displayName || !payload.role || !payload.jti) {
+  if (
+    typeof payload.sub !== 'string'
+    || !payload.sub.trim()
+    || payload.sub.length > 200
+    || typeof payload.displayName !== 'string'
+    || !payload.displayName.trim()
+    || payload.displayName.length > 200
+    || typeof payload.role !== 'string'
+    || !payload.role.trim()
+    || typeof payload.jti !== 'string'
+    || !payload.jti.trim()
+    || payload.jti.length > 200
+  ) {
     throw new IntegrationError('Launch token is missing required claims.');
   }
-  if (!Number.isFinite(payload.iat) || !Number.isFinite(payload.exp)) {
+  if (!Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp)) {
     throw new IntegrationError('Launch token has invalid timestamps.');
   }
   if (payload.exp <= nowSec) throw new IntegrationError('Launch token has expired.', 401);
-  if (payload.iat > nowSec + 30) throw new IntegrationError('Launch token was issued in the future.', 401);
-  if (nowSec - payload.iat > 120) throw new IntegrationError('Launch token is too old.', 401);
+  if (payload.exp <= payload.iat) {
+    throw new IntegrationError('Launch token has an invalid lifetime.', 401);
+  }
+  if (payload.exp - payload.iat > MAX_LAUNCH_LIFETIME_SECONDS) {
+    throw new IntegrationError('Launch token lifetime is too long.', 401);
+  }
+  if (payload.iat > nowSec + MAX_CLOCK_SKEW_SECONDS) {
+    throw new IntegrationError('Launch token was issued in the future.', 401);
+  }
+  if (nowSec - payload.iat > MAX_LAUNCH_AGE_SECONDS) {
+    throw new IntegrationError('Launch token is too old.', 401);
+  }
 
   const role = normalizeRole(String(payload.role));
   if (!role) throw new IntegrationError('Launch token role is not allowed.', 403);

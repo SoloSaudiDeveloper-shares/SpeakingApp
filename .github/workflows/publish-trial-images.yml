@@ -2,8 +2,14 @@ name: Publish free-trial images
 
 on:
   workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Git SHA already published by the successful release-gates workflow
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -15,10 +21,6 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
       - name: Resolve immutable GHCR image names
         shell: bash
         run: |
@@ -26,28 +28,53 @@ jobs:
           {
             echo "APP_IMAGE=ghcr.io/${owner}/speaking-lab"
             echo "JOBS_IMAGE=ghcr.io/${owner}/speaking-lab-jobs"
-            echo "RELEASE_SHA=${GITHUB_SHA}"
+            echo "RELEASE_SHA=${{ inputs.release_sha }}"
           } >> "$GITHUB_ENV"
 
+      - name: Require a successful release-gates run for the requested SHA
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          run_id="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${RELEASE_SHA}&status=success&event=push" \
+            --jq '.workflow_runs[0].id // empty')"
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download the verified archives for the requested SHA
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-images-${{ inputs.release_sha }}
+          run-id: ${{ steps.release.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Authenticate to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and publish secret-free immutable images
+      - name: Promote previously verified immutable images to trial
         shell: bash
         run: |
-          docker build --target runner \
-            -t "${APP_IMAGE}:${RELEASE_SHA}" \
-            -t "${APP_IMAGE}:trial" .
-          docker build --target jobs \
-            -t "${JOBS_IMAGE}:${RELEASE_SHA}" \
-            -t "${JOBS_IMAGE}:trial" .
-          docker push "${APP_IMAGE}:${RELEASE_SHA}"
+          set -euo pipefail
+          sha256sum --check verified-images.sha256
+          gzip -dc verified-app-image.tar.gz | docker load
+          gzip -dc verified-jobs-image.tar.gz | docker load
+          verified_app_id="$(docker image inspect --format='{{.Id}}' "speaking-lab:${RELEASE_SHA}")"
+          verified_jobs_id="$(docker image inspect --format='{{.Id}}' "speaking-lab-jobs:${RELEASE_SHA}")"
+          docker pull "${APP_IMAGE}:${RELEASE_SHA}"
+          docker pull "${JOBS_IMAGE}:${RELEASE_SHA}"
+          test "$verified_app_id" = "$(docker image inspect --format='{{.Id}}' "${APP_IMAGE}:${RELEASE_SHA}")"
+          test "$verified_jobs_id" = "$(docker image inspect --format='{{.Id}}' "${JOBS_IMAGE}:${RELEASE_SHA}")"
+          docker tag "${APP_IMAGE}:${RELEASE_SHA}" "${APP_IMAGE}:trial"
+          docker tag "${JOBS_IMAGE}:${RELEASE_SHA}" "${JOBS_IMAGE}:trial"
           docker push "${APP_IMAGE}:trial"
-          docker push "${JOBS_IMAGE}:${RELEASE_SHA}"
           docker push "${JOBS_IMAGE}:trial"
 
       - name: Record immutable image references

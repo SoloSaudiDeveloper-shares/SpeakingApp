@@ -1,6 +1,7 @@
 import { callChat, getActiveProvider } from '@/lib/ai/providers';
 import { getReportOverview, getStudentReport } from '@/lib/actions/report-actions';
 import { requireReportUser } from '../_auth';
+import { consumeCloudAiBudgetIfNeeded } from '@/lib/security/resource-budget-server';
 
 function safeParseInsight(content: string) {
   try {
@@ -52,6 +53,7 @@ export async function POST(request: Request) {
         };
 
     try {
+      await consumeCloudAiBudgetIfNeeded(auth.user.id);
       const provider = await getActiveProvider();
       const result = await callChat([
         {

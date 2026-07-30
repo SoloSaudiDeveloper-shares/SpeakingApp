@@ -23,6 +23,12 @@ param storageAccountName string = 'speakinglabst20260729'
 @description('Existing RBAC-enabled Key Vault.')
 param keyVaultName string = 'speakinglab-kv-20260729'
 
+@description('Optional immutable public Blob prefix used for companion model packages.')
+param voiceModelBaseUrl string = ''
+
+@description('Optional workspace-based Application Insights connection string.')
+param applicationInsightsConnectionString string = ''
+
 @description('Public, secret-free application image pinned to a Git commit SHA.')
 param appImage string
 
@@ -168,6 +174,11 @@ var applicationSecrets = concat(
       keyVaultUrl: databaseUrlSecret.properties.secretUri
       identity: identity.id
     }
+    {
+      name: 'xapi-job-token'
+      keyVaultUrl: xapiJobSecret.properties.secretUri
+      identity: identity.id
+    }
   ],
   !empty(externalSsoSharedSecret) ? [
     {
@@ -201,6 +212,8 @@ var applicationEnvironment = concat(
     { name: 'AZURE_KEY_VAULT_URL', value: vault.properties.vaultUri }
     { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${az.environment().suffixes.storage}' }
     { name: 'AZURE_AUDIO_CONTAINER', value: audioContainerName }
+    { name: 'VOICE_MODEL_BASE_URL', value: voiceModelBaseUrl }
+    { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: applicationInsightsConnectionString }
     { name: 'SESSION_COOKIE_SECURE', value: 'true' }
     { name: 'EXTERNAL_SSO_ENABLED', value: string(effectiveExternalSsoEnabled) }
     { name: 'EXTERNAL_SSO_PROVIDER_ID', value: externalSsoProviderId }
@@ -208,6 +221,7 @@ var applicationEnvironment = concat(
     { name: 'EXTERNAL_SSO_AUDIENCE', value: externalSsoAudience }
     { name: 'EXTERNAL_SSO_ALLOW_ADMIN', value: 'false' }
     { name: 'XAPI_ENABLED', value: string(effectiveXapiEnabled) }
+    { name: 'XAPI_JOB_TOKEN', secretRef: 'xapi-job-token' }
     { name: 'XAPI_LRS_URL', value: xapiLrsUrl }
     { name: 'XAPI_SOURCE_APP', value: 'speaking-lab' }
     { name: 'XAPI_ACTOR_HOMEPAGE', value: 'https://saif.rsaf.mil' }
@@ -274,7 +288,17 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
       ]
       scale: {
         minReplicas: 0
-        maxReplicas: 1
+        maxReplicas: 2
+        rules: [
+          {
+            name: 'http-concurrency'
+            http: {
+              metadata: {
+                concurrentRequests: '10'
+              }
+            }
+          }
+        ]
       }
     }
   }
@@ -327,7 +351,7 @@ resource migrationJob 'Microsoft.App/jobs@2025-01-01' = {
   }
 }
 
-resource xapiJob 'Microsoft.App/jobs@2025-01-01' = {
+resource xapiJob 'Microsoft.App/jobs@2025-01-01' = if (effectiveXapiEnabled) {
   name: '${prefix}-xapi'
   location: location
   identity: {
@@ -356,6 +380,49 @@ resource xapiJob 'Microsoft.App/jobs@2025-01-01' = {
           env: [
             { name: 'APP_BASE_URL', value: 'https://${app.properties.configuration.ingress.fqdn}' }
             { name: 'XAPI_JOB_TOKEN', secretRef: 'xapi-job-token' }
+          ]
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+        }
+      ]
+    }
+  }
+}
+
+// A daily real-network check records cold and warm TTFB, total transfer time,
+// and bytes delivered. This catches the mid-body stalls documented in the
+// field guide that ordinary readiness probes cannot observe.
+resource deliveryProbeJob 'Microsoft.App/jobs@2025-01-01' = {
+  name: '${prefix}-delivery-probe'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identity.id}': {} }
+  }
+  properties: {
+    environmentId: environment.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 180
+      replicaRetryLimit: 1
+      secrets: jobSecrets
+      scheduleTriggerConfig: {
+        cronExpression: '0 5 * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+    }
+    template: {
+      containers: [
+        {
+          name: 'delivery-probe'
+          image: jobsImage
+          command: ['/bin/sh', '-c']
+          args: [
+            'set -eu; URL="https://${app.properties.configuration.ingress.fqdn}/api/health/delivery"; for PHASE in cold warm; do curl --fail --show-error --silent --header "Authorization: Bearer $XAPI_JOB_TOKEN" --output "/tmp/$PHASE.body" --write-out "target=app phase=$PHASE status=%{http_code} ttfb=%{time_starttransfer} total=%{time_total} bytes=%{size_download}\\n" --max-time 60 "$URL"; test "$(wc -c < "/tmp/$PHASE.body")" -eq 2097152; done; if [ -n "$VOICE_MODEL_BASE_URL" ]; then curl --fail --show-error --silent --output /tmp/model-manifest.json "${voiceModelBaseUrl}manifest.json"; PROBE_PATH="$(node -e "const m=require(\\"/tmp/model-manifest.json\\"); if(!m.probePath) process.exit(1); process.stdout.write(m.probePath)")"; PROBE_SHA="$(node -e "const m=require(\\"/tmp/model-manifest.json\\"); if(!m.probeSha256) process.exit(1); process.stdout.write(m.probeSha256)")"; curl --fail --show-error --silent --output /tmp/model-probe.bin --write-out "target=model status=%{http_code} ttfb=%{time_starttransfer} total=%{time_total} bytes=%{size_download}\\n" --max-time 90 "${voiceModelBaseUrl}$PROBE_PATH"; echo "$PROBE_SHA  /tmp/model-probe.bin" | sha256sum --check --strict; fi'
+          ]
+          env: [
+            { name: 'XAPI_JOB_TOKEN', secretRef: 'xapi-job-token' }
+            { name: 'VOICE_MODEL_BASE_URL', value: voiceModelBaseUrl }
           ]
           resources: { cpu: json('0.25'), memory: '0.5Gi' }
         }
@@ -410,8 +477,9 @@ output containerAppName string = app.name
 output containerAppUrl string = 'https://${app.properties.configuration.ingress.fqdn}'
 output containerAppsEnvironmentName string = environment.name
 output migrationJobName string = migrationJob.name
-output xapiJobName string = xapiJob.name
+output xapiJobName string = effectiveXapiEnabled ? xapiJob!.name : ''
 output backupJobName string = backupJob.name
+output deliveryProbeJobName string = deliveryProbeJob.name
 output runtimeIdentityClientId string = identity.properties.clientId
 output databaseProvider string = 'external-postgresql'
 output minimumReplicas int = 0

@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { AuthProvider } from "@/lib/hooks/use-auth"
 import { AuthLayout } from "./auth-layout"
 import { SttFallbackToast } from "./stt-fallback-toast"
+import { TtsFallbackToast } from "./tts-fallback-toast"
 import { loadConfiguredEngineId } from "@/lib/speech/speech-factory"
 
 export function ClientProviders({ children }: { children: React.ReactNode }) {
@@ -15,6 +16,7 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
     <AuthProvider>
       <AuthLayout>{children}</AuthLayout>
       <SttFallbackToast />
+      <TtsFallbackToast />
     </AuthProvider>
   )
 }

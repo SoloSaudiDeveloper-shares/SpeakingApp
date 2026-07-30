@@ -32,8 +32,11 @@ export function TtsPicker() {
 
   const handleTest = async () => {
     setTesting(true)
-    await speak("Hello! This is a preview of your selected voice.")
-    setTesting(false)
+    try {
+      await speak("Hello! This is a preview of your selected voice.")
+    } finally {
+      setTesting(false)
+    }
   }
 
   const handleReset = () => {

@@ -15,6 +15,9 @@ web/test-results
 web/out
 web/data
 web/public/models/Xenova
+# Browser neural TTS is not a production web capability. Kokoro is installed
+# only by the signed Windows companion package.
+web/public/models/onnx-community/Kokoro-82M-v1.0-ONNX
 *.db
 *.db-shm
 *.db-wal

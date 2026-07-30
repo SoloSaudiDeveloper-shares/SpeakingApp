@@ -56,6 +56,7 @@ export class KokoroTtsEngine implements TtsEngine {
   readonly id = "kokoro" as const
   readonly name = "Kokoro (offline)"
   readonly isOffline = true
+  private speakGeneration = 0
 
   isAvailable(): boolean {
     return typeof window !== "undefined"
@@ -66,7 +67,7 @@ export class KokoroTtsEngine implements TtsEngine {
   }
 
   async prepare(): Promise<void> {
-    if (loadError) return
+    if (loadError) throw new Error(loadError)
     await this.load()
   }
 
@@ -130,14 +131,24 @@ export class KokoroTtsEngine implements TtsEngine {
   }
 
   async speak(text: string, opts?: SpeakOptions): Promise<void> {
+    const generation = ++this.speakGeneration
+    if (opts?.signal?.aborted) throw opts.signal.reason
     const voiceId = opts?.voice && VOICES.some((v) => v.id === opts.voice) ? opts.voice : DEFAULT_VOICE
     // Kokoro takes a native speed input → adjust rate without pitch artifacts.
     const speed = Math.max(0.5, Math.min(2, opts?.rate ?? 1))
     const { audio, sampleRate } = await this.synthesize(text, voiceId, speed)
-    await playPcm(audio, sampleRate, { volume: opts?.volume ?? 1 })
+    if (generation !== this.speakGeneration) {
+      throw new DOMException("Speech was superseded.", "AbortError")
+    }
+    if (opts?.signal?.aborted) throw opts.signal.reason
+    await playPcm(audio, sampleRate, {
+      volume: opts?.volume ?? 1,
+      signal: opts?.signal,
+    })
   }
 
   cancel(): void {
+    this.speakGeneration += 1
     stopPlayback()
   }
 }

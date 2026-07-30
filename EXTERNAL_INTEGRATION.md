@@ -5,6 +5,8 @@ This app can run standalone with its built-in login, or a custom portal can laun
 For the joint SAIF programmer handover, contract traceability, sandbox verification,
 and Azure cutover sequence, use
 [`integration/SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md`](integration/SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md).
+The SAIF-side coding checklist and reference implementation are in
+[`integration/SAIF_PROGRAMMER_IMPLEMENTATION_GUIDE.md`](integration/SAIF_PROGRAMMER_IMPLEMENTATION_GUIDE.md).
 The present document is the generic application interface reference.
 
 ## SSO Launch
@@ -32,7 +34,10 @@ JWT requirements:
 - Algorithm: `HS256`
 - Required claims: `iss`, `aud`, `sub`, `role`, `displayName`, `iat`, `exp`, `jti`
 - Allowed roles: `Student`, `Teacher`; `Admin` only when `EXTERNAL_SSO_ALLOW_ADMIN=true`
+- `iat` and `exp` are integer Unix seconds, `exp` is later than `iat`, and the
+  declared lifetime is no more than 120 seconds
 - Max age: 2 minutes from `iat`
+- Shared secret: at least 32 characters/bytes as supplied by deployment
 - `jti` can only be used once
 - Optional claims: `email`, `studentNumber`, `className`, `classId`, `redirectTo`
 

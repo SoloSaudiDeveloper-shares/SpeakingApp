@@ -32,7 +32,7 @@ jobs:
       SESSION_COOKIE_SECURE: 'false'
       SPEAKING_LAB_SKIP_DB_INIT: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -51,16 +51,20 @@ jobs:
           docker logs azurite
           exit 1
 
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_SUMMARY: 'false'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
 
       - name: Install
         working-directory: web
@@ -148,6 +152,18 @@ jobs:
           npm run typecheck
           npm test
 
+      - name: Build and inspect the Windows voice companion
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build companion/src/SpeakingLab.Companion/SpeakingLab.Companion.csproj \
+            --configuration Release
+          python -m py_compile companion/worker/main.py companion/worker/run.py
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse("companion/installer/Product.wxs")
+          PY
+
       - name: PostgreSQL backup and clean restore drill
         working-directory: web
         env:
@@ -173,9 +189,12 @@ jobs:
         working-directory: web
         run: npm run test:e2e
 
-      - name: Build and inspect production image
+      - name: Build and inspect release images once
+        shell: bash
         run: |
-          docker build -t "speaking-lab:${GITHUB_SHA}" .
+          set -euo pipefail
+          docker build --target runner -t "speaking-lab:${GITHUB_SHA}" .
+          docker build --target jobs -t "speaking-lab-jobs:${GITHUB_SHA}" .
           docker history --no-trunc "speaking-lab:${GITHUB_SHA}" > image-history.txt
           docker run --rm --entrypoint sh "speaking-lab:${GITHUB_SHA}" -c '
             if find /app \( -iname "*sqlite*" -o -iname "*electron*" -o -name "*.db" -o -name ".env*" \) | grep -q .; then
@@ -187,10 +206,31 @@ jobs:
               exit 1
             fi
           '
+          docker run --rm --entrypoint sh "speaking-lab-jobs:${GITHUB_SHA}" -c '
+            if find /app \( -name "*.db" -o -name ".env*" -o -iname "*electron*" \) | grep -q .; then
+              exit 1
+            fi
+          '
+          npm --prefix web sbom --omit=dev --sbom-format=cyclonedx > release-sbom.cdx.json
+          docker save "speaking-lab:${GITHUB_SHA}" | gzip -9 > verified-app-image.tar.gz
+          docker save "speaking-lab-jobs:${GITHUB_SHA}" | gzip -9 > verified-jobs-image.tar.gz
+          sha256sum verified-app-image.tar.gz verified-jobs-image.tar.gz > verified-images.sha256
+
+      - name: Upload the exact verified release images
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-images-${{ github.sha }}
+          path: |
+            verified-app-image.tar.gz
+            verified-jobs-image.tar.gz
+            verified-images.sha256
+            release-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload non-secret test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verification-reports
           path: |
@@ -198,20 +238,210 @@ jobs:
             web/test-results
             image-history.txt
             web/sqlite-reconciliation.json
+            release-sbom.cdx.json
           if-no-files-found: ignore
+
+  companion_release_gate:
+    name: Build and exercise the Windows companion deliverable
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: companion/worker/requirements.lock
+
+      - name: Install the hash-locked worker and WiX toolchain
+        shell: pwsh
+        run: |
+          python -m pip install --require-hashes -r companion/worker/requirements.lock
+          python -m pip check
+          dotnet tool install --tool-path "$env:RUNNER_TEMP\wix" wix --version 4.0.6
+          & "$env:RUNNER_TEMP\wix\wix.exe" extension add `
+            WixToolset.Util.wixext/4.0.6 --global
+
+      - name: Publish the service and freeze the Python worker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory `
+            -Path companion/artifacts/service, companion/artifacts/worker `
+            -Force | Out-Null
+          dotnet publish companion/src/SpeakingLab.Companion/SpeakingLab.Companion.csproj `
+            --configuration Release --runtime win-x64 --self-contained true `
+            --output companion/artifacts/service
+          Push-Location companion/worker
+          try {
+            python -m PyInstaller worker.spec --noconfirm --clean `
+              --distpath ../artifacts/worker `
+              --workpath "$env:RUNNER_TEMP\speaking-worker-build"
+          }
+          finally {
+            Pop-Location
+          }
+          if (-not (Test-Path companion/artifacts/service/SpeakingLab.Companion.exe)) {
+            throw "The self-contained companion executable was not produced."
+          }
+          if (-not (Test-Path companion/artifacts/worker/SpeakingLab.KokoroWorker.exe)) {
+            throw "The frozen Kokoro worker executable was not produced."
+          }
+
+      - name: Download and verify the immutable synthesis fixtures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = "$env:RUNNER_TEMP\kokoro-model"
+          New-Item -ItemType Directory -Path $fixture -Force | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx" `
+            -OutFile "$fixture\model.onnx"
+          Invoke-WebRequest `
+            -Uri "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin" `
+            -OutFile "$fixture\voices.bin"
+          $expected = @{
+            "model.onnx" = @{
+              Bytes = 92361271
+              Sha256 = "6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb"
+            }
+            "voices.bin" = @{
+              Bytes = 28214398
+              Sha256 = "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
+            }
+          }
+          foreach ($name in $expected.Keys) {
+            $path = Join-Path $fixture $name
+            if ((Get-Item -LiteralPath $path).Length -ne $expected[$name].Bytes) {
+              throw "$name has an unexpected size."
+            }
+            $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualHash -ne $expected[$name].Sha256) {
+              throw "$name failed SHA-256 verification."
+            }
+          }
+
+      - name: Test-sign binaries and exercise signed installation and synthesis
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $certificate = New-SelfSignedCertificate -Type CodeSigningCert `
+            -Subject "CN=Speaking Lab CI Companion Signing" `
+            -CertStoreLocation "Cert:\CurrentUser\My"
+          $certificateFile = "$env:RUNNER_TEMP\companion-ci-signing.cer"
+          Export-Certificate -Cert $certificate -FilePath $certificateFile | Out-Null
+          Import-Certificate -FilePath $certificateFile `
+            -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+          $signTool = Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signTool) { throw "SignTool was not found." }
+          foreach ($binary in @(
+            "companion/artifacts/service/SpeakingLab.Companion.exe",
+            "companion/artifacts/worker/SpeakingLab.KokoroWorker.exe"
+          )) {
+            & $signTool sign /fd SHA256 /sha1 $certificate.Thumbprint /s My $binary
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $binary." }
+            & $signTool verify /pa $binary
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for $binary." }
+          }
+          ./companion/tests/release-smoke.ps1 `
+            -ServiceDirectory companion/artifacts/service `
+            -WorkerExecutable companion/artifacts/worker/SpeakingLab.KokoroWorker.exe `
+            -ModelSourceDirectory "$env:RUNNER_TEMP\kokoro-model" `
+            -OutputDirectory "$env:RUNNER_TEMP\companion-smoke"
+
+      - name: Build, test-sign, and lifecycle-test the MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $wix = "$env:RUNNER_TEMP\wix\wix.exe"
+          $keyPath = "companion/artifacts/service/voice-model-public.pem"
+          foreach ($version in @("1.0.0", "1.0.1")) {
+            & $wix build companion/installer/Product.wxs -arch x64 `
+              -ext WixToolset.Util.wixext `
+              -d "PackageVersion=$version" `
+              -d "ServiceSource=companion/artifacts/service" `
+              -d "WorkerSource=companion/artifacts/worker" `
+              -d "ModelPublicKeySource=companion/artifacts/service" `
+              -d "ModelBaseUrl=https://models.invalid/" `
+              -d "AppOrigin=https://ci.speaking-lab.invalid" `
+              -o "companion/artifacts/SpeakingLabVoiceCompanion-$version.msi"
+            if ($LASTEXITCODE -ne 0) { throw "WiX failed for version $version." }
+          }
+          $certificate = Get-ChildItem Cert:\CurrentUser\My |
+            Where-Object Subject -eq "CN=Speaking Lab CI Companion Signing" |
+            Select-Object -First 1
+          $signTool = Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          foreach ($msi in Get-ChildItem companion/artifacts -Filter *.msi) {
+            & $signTool sign /fd SHA256 /sha1 $certificate.Thumbprint /s My $msi.FullName
+            if ($LASTEXITCODE -ne 0) { throw "MSI signing failed." }
+            & $signTool verify /pa $msi.FullName
+            if ($LASTEXITCODE -ne 0) { throw "MSI signature verification failed." }
+          }
+          ./companion/tests/msi-lifecycle.ps1 `
+            -VersionOneMsi companion/artifacts/SpeakingLabVoiceCompanion-1.0.0.msi `
+            -VersionTwoMsi companion/artifacts/SpeakingLabVoiceCompanion-1.0.1.msi `
+            -LogDirectory "$env:RUNNER_TEMP\msi-logs"
+
+      - name: Generate checksums, dependency evidence, and malware-scan evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip inspect > companion/artifacts/python-dependencies.json
+          dotnet list companion/src/SpeakingLab.Companion/SpeakingLab.Companion.csproj `
+            package --include-transitive --format json `
+            > companion/artifacts/dotnet-dependencies.json
+          Get-ChildItem companion/artifacts -File -Recurse |
+            Get-FileHash -Algorithm SHA256 |
+            Select-Object Path, Hash |
+            ConvertTo-Json |
+            Set-Content companion/artifacts/SHA256SUMS.json -Encoding utf8NoBOM
+          $defender = Get-ChildItem `
+            "$env:ProgramData\Microsoft\Windows Defender\Platform\*\MpCmdRun.exe" |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $defender) { throw "Microsoft Defender CLI was not found." }
+          & $defender -Scan -ScanType 3 -File `
+            (Resolve-Path companion/artifacts).Path `
+            *> companion/artifacts/malware-scan.txt
+          if ($LASTEXITCODE -ne 0) { throw "Microsoft Defender reported a scan failure." }
+
+      - name: Upload the exercised companion package
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: companion-release-gate-${{ github.sha }}
+          path: |
+            companion/artifacts
+            ${{ runner.temp }}/companion-smoke/logs
+            ${{ runner.temp }}/msi-logs
+          if-no-files-found: error
+          retention-days: 7
 
   publish_trial_images:
     name: Publish verified free-trial images
-    needs: verify
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/postgres-azure'
+    needs: [verify, companion_release_gate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Download the images produced by the verification job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          fetch-depth: 1
+          name: verified-images-${{ github.sha }}
 
       - name: Resolve immutable GHCR image names
         shell: bash
@@ -224,22 +454,30 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Authenticate to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish the images that passed every release gate
+      - name: Publish the exact images that passed every release gate
         shell: bash
         run: |
-          docker build --target runner \
-            -t "${APP_IMAGE}:${RELEASE_SHA}" \
-            -t "${APP_IMAGE}:trial" .
-          docker build --target jobs \
-            -t "${JOBS_IMAGE}:${RELEASE_SHA}" \
-            -t "${JOBS_IMAGE}:trial" .
+          set -euo pipefail
+          sha256sum --check verified-images.sha256
+          gzip -dc verified-app-image.tar.gz | docker load
+          gzip -dc verified-jobs-image.tar.gz | docker load
+          docker tag "speaking-lab:${RELEASE_SHA}" "${APP_IMAGE}:${RELEASE_SHA}"
+          docker tag "speaking-lab-jobs:${RELEASE_SHA}" "${JOBS_IMAGE}:${RELEASE_SHA}"
           docker push "${APP_IMAGE}:${RELEASE_SHA}"
-          docker push "${APP_IMAGE}:trial"
           docker push "${JOBS_IMAGE}:${RELEASE_SHA}"
-          docker push "${JOBS_IMAGE}:trial"
+          app_digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${APP_IMAGE}:${RELEASE_SHA}")"
+          jobs_digest="$(docker inspect --format='{{index .RepoDigests 0}}' "${JOBS_IMAGE}:${RELEASE_SHA}")"
+          {
+            echo "### Promoted verified images"
+            echo
+            echo "- \`${app_digest}\`"
+            echo "- \`${jobs_digest}\`"
+            echo
+            echo "These are the exact image archives tested in the verify job; no rebuild occurred."
+          } >> "$GITHUB_STEP_SUMMARY"

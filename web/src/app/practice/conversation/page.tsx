@@ -6,7 +6,7 @@ import { Send, Mic, MicOff, Loader2, MessageCircle, Sparkles, AlertTriangle, Che
 import { getDefaultEngine, getSpeechEngine } from "@/lib/speech/speech-factory"
 import type { SpeechEngine, STTEngineId } from "@/lib/speech/types"
 import { recordClientSpeechReliabilityEvent } from "@/lib/speech/reliability-client"
-import { speak, cancelSpeak, prepareActiveTts } from "@/lib/speech/tts"
+import { speak, cancelSpeak } from "@/lib/speech/tts"
 import { useI18n } from "@/components/layout/i18n-provider"
 import { SCENARIOS, type Scenario } from "@/lib/ai/scenarios"
 import type { ScenarioProgressionMode } from "@/lib/ai/scenarios"
@@ -82,8 +82,8 @@ export default function AIConversationPage() {
   // The AI tutor is currently speaking (TTS playing) — block recording so the
   // mic doesn't capture the AI's own voice.
   const [aiSpeaking, setAiSpeaking] = useState(false)
-  // The voice model has finished loading — until then, "Speak" is disabled.
-  const [ttsReady, setTtsReady] = useState(false)
+  // TTS provider readiness no longer acquires or blocks on a browser-local model.
+  const ttsReady = true
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const engineRef = useRef<SpeechEngine | null>(null)
   const interimUnsubRef = useRef<(() => void) | null>(null)
@@ -129,13 +129,11 @@ export default function AIConversationPage() {
       })
       .catch(() => {})
 
-    // Warm up the STT engine (offline models cold-load) and the active neural
-    // voice (Kokoro). "Speak" stays disabled with a "loading voice…" message
-    // until the voice model is ready, so the user never talks to a dead mic.
+    // Warm up only the STT engine. Browser-local TTS acquisition is an explicit
+    // user action in Voice settings.
     const saved = (typeof window !== "undefined" ? localStorage.getItem("stt-engine") : null) as STTEngineId | null
     engineRef.current = saved ? getSpeechEngine(saved) : getDefaultEngine()
     engineRef.current.prepare?.().catch(() => {})
-    prepareActiveTts().finally(() => setTtsReady(true))
   }, [])
 
   useEffect(() => {

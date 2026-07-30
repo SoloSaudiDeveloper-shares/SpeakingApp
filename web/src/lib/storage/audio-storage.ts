@@ -1,5 +1,6 @@
 import { DefaultAzureCredential } from '@azure/identity';
 import { BlobServiceClient, StorageSharedKeyCredential } from '@azure/storage-blob';
+import { Readable } from 'node:stream';
 
 const CONTAINER_NAME = process.env.AZURE_AUDIO_CONTAINER?.trim() || 'speaking-audio';
 
@@ -46,6 +47,52 @@ export async function uploadAudioObject(key: string, data: Buffer, contentType: 
     blobHTTPHeaders: { blobContentType: contentType || 'application/octet-stream' },
   });
   return safeKey;
+}
+
+export async function uploadAudioStream(
+  key: string,
+  data: Readable,
+  contentType: string,
+) {
+  const safeKey = normalizeAudioObjectKey(key);
+  const containerClient = container();
+  await containerClient.createIfNotExists();
+  await containerClient.getBlockBlobClient(safeKey).uploadStream(
+    data,
+    4 * 1024 * 1024,
+    2,
+    { blobHTTPHeaders: { blobContentType: contentType } },
+  );
+  return safeKey;
+}
+
+export async function getAudioObjectProperties(key: string) {
+  const safeKey = normalizeAudioObjectKey(key);
+  const properties = await container().getBlobClient(safeKey).getProperties();
+  return {
+    contentLength: properties.contentLength ?? 0,
+    contentType: properties.contentType,
+    etag: properties.etag,
+    lastModified: properties.lastModified,
+  };
+}
+
+export async function streamAudioObject(
+  key: string,
+  range?: { offset: number; count: number },
+) {
+  const safeKey = normalizeAudioObjectKey(key);
+  const response = await container().getBlobClient(safeKey).download(
+    range?.offset,
+    range?.count,
+  );
+  if (!response.readableStreamBody) throw new Error('Audio blob did not contain a body.');
+  return Readable.toWeb(response.readableStreamBody as Readable) as ReadableStream<Uint8Array>;
+}
+
+export async function deleteAudioObjectIfExists(key: string) {
+  const safeKey = normalizeAudioObjectKey(key);
+  await container().getBlobClient(safeKey).deleteIfExists();
 }
 
 export async function downloadAudioObject(key: string) {

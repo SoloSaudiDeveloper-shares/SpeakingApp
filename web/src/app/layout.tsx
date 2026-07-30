@@ -20,8 +20,6 @@ export const viewport: Viewport = {
   themeColor: "#3b82f6",
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
 }
 
 export default function RootLayout({
@@ -30,7 +28,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" dir="ltr" suppressHydrationWarning>
       <body>
         <ThemeProvider
           attribute="class"

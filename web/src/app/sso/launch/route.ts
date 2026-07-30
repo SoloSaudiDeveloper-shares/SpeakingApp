@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { IntegrationError, launchExternalSso } from '@/lib/integrations/external-auth';
+import {
+  SESSION_COOKIE_MAX_AGE_SECONDS,
+  sessionCookieOptions,
+} from '@/lib/auth/session-cookie';
 
 function secureLaunchResponse(response: NextResponse): NextResponse {
   response.headers.set('Cache-Control', 'no-store');
@@ -22,10 +26,8 @@ export async function GET(request: NextRequest) {
     const redirectUrl = new URL(result.redirectTo, request.url);
     const response = NextResponse.redirect(redirectUrl);
     response.cookies.set('session-token', result.token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.SESSION_COOKIE_SECURE === 'true',
-      path: '/',
+      ...sessionCookieOptions(),
+      maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,
     });
     return secureLaunchResponse(response);
   } catch (error) {

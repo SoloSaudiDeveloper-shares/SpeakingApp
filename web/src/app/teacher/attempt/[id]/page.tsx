@@ -218,7 +218,7 @@ export default function TeacherAttemptPage({
             <Volume2 size={16} /> Audio Recording
           </h2>
           <audio controls className="w-full">
-            <source src={`/api/audio/${attempt.audioPath}`} />
+            <source src={`/api/attempts/${attempt.id}/audio`} />
             Your browser does not support audio playback.
           </audio>
         </div>

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Mic, MicOff, Volume2, ArrowRight, RotateCcw, Loader2, ArrowLeft, Settings2, AlertTriangle, BookOpen, Sparkles, Eye, MessageSquare, Ear } from "lucide-react"
 import { useAuth } from "@/lib/hooks/use-auth"
-import { speak, prepareActiveTts } from "@/lib/speech/tts"
+import { speak } from "@/lib/speech/tts"
 import { getSpeechEngine, getDefaultEngine, markEngineFailed, DEFAULT_ENGINE_ID } from "@/lib/speech/speech-factory"
 import { recordClientSpeechReliabilityEvent } from "@/lib/speech/reliability-client"
 import { checkWebGPU } from "@/lib/speech/webgpu-check"
@@ -223,16 +223,14 @@ export default function PracticePage() {
     const saved = localStorage.getItem("stt-engine") as STTEngineId | null
     if (saved) { setEngineId(saved); engineRef.current = getSpeechEngine(saved) }
     else { setEngineId(DEFAULT_ENGINE_ID); engineRef.current = getDefaultEngine() }
-    // Warm up the offline STT model + the TTS voice shortly after first paint
-    // (deferred so it never janks the initial render). This makes the first
-    // "Listen" play the Kokoro voice instantly instead of lagging or falling back.
+    // Warm up only the configured STT model. Browser-local TTS acquisition is
+    // an explicit user action in Voice settings.
     const warmId = setTimeout(() => {
       const prep = engineRef.current?.prepare
       if (prep) {
         setEngineLoading(true)
         prep.call(engineRef.current).catch(() => {}).finally(() => setEngineLoading(false))
       }
-      prepareActiveTts().catch(() => {})
     }, 1500)
 
     // Check WebGPU once + whether Azure pronunciation scoring is configured.
@@ -312,9 +310,12 @@ export default function PracticePage() {
   const handleListen = useCallback(async () => {
     if (!currentVocab) return
     setSpeaking(true)
-    // Sentence stage: speak the full example sentence; otherwise just the word
-    await speak(stage === "sentence" && currentVocab.exampleSentence ? currentVocab.exampleSentence : currentVocab.word)
-    setSpeaking(false)
+    try {
+      // Sentence stage: speak the full example sentence; otherwise just the word
+      await speak(stage === "sentence" && currentVocab.exampleSentence ? currentVocab.exampleSentence : currentVocab.word)
+    } finally {
+      setSpeaking(false)
+    }
   }, [currentVocab, stage])
 
   /** Listen-only stage: tap "Got it" to mark complete and move on (no recording).
@@ -624,22 +625,13 @@ export default function PracticePage() {
       setFeedback(finalFeedback)
 
       if (data?.cycle && data?.book && currentTask) {
-        let audioPath: string | undefined
-        if (recordingBlob) {
-          const form = new FormData()
-          form.append("audio", recordingBlob, `attempt.${recordingBlob.type.includes("wav") ? "wav" : "webm"}`)
-          const upload = await fetch("/api/audio", { method: "POST", body: form })
-          if (upload.ok) {
-            const uploaded = await upload.json()
-            if (typeof uploaded?.key === "string") audioPath = uploaded.key
-          }
-        }
+        const clientSubmissionId = crypto.randomUUID()
         const saveResponse = await fetch("/api/practice/attempt", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             cycleId: data.cycle.id, bookId: data.book.id,
             practiceTaskId: currentTask.id, rawTranscript: finalTranscript,
-            audioPath,
+            clientSubmissionId,
             targetMatchScore: finalScores.targetMatch,
             pronunciationScore: finalScores.pronunciation,
             fluencyScore: finalScores.fluency,
@@ -664,6 +656,44 @@ export default function PracticePage() {
             if (saved?.feedback) setFeedback(saved.feedback)
             if (saved?.freeSpeak) setFreeSpeakMeta(saved.freeSpeak)
           }
+          const attemptId = Number(saved?.attempt?.id)
+          if (recordingBlob && Number.isSafeInteger(attemptId) && attemptId > 0) {
+            let recordingSaved = false
+            for (let uploadAttempt = 0; uploadAttempt < 3 && !recordingSaved; uploadAttempt += 1) {
+              try {
+                const upload = await fetch(`/api/attempts/${attemptId}/audio`, {
+                  method: "PUT",
+                  headers: { "Content-Type": recordingBlob.type || "application/octet-stream" },
+                  body: recordingBlob,
+                })
+                recordingSaved = upload.ok
+              } catch {
+                recordingSaved = false
+              }
+              if (!recordingSaved && uploadAttempt < 2) {
+                await new Promise((resolve) => setTimeout(resolve, 250 * (uploadAttempt + 1)))
+              }
+            }
+            if (!recordingSaved) {
+              setSttError({
+                engine: "Recording",
+                message: "Your score was saved, but the recording could not be saved. You can continue or try this item again.",
+              })
+              void recordClientSpeechReliabilityEvent({
+                eventType: "recording",
+                provider: "attempt-audio",
+                route: "attempt-audio-upload",
+                practiceStage: stage,
+                success: false,
+                errorCode: "upload-exhausted",
+              })
+            }
+          }
+        } else {
+          setSttError({
+            engine: "Practice",
+            message: "We could not save this attempt. Please try this item again.",
+          })
         }
       }
     } catch (err) {
@@ -712,7 +742,7 @@ export default function PracticePage() {
     setScores(null); setListenDone(false); setRevealed(false); setFeedback(null); setMetrics(null); setFreeSpeakMeta(null); setAzureWords(null); setTranscript(null); setRecordingTime(0); setSttError(null)
   }
   const handleShadowModelAnswer = (text: string) => {
-    void speak(text)
+    void speak(text).catch(() => undefined)
   }
 
   if (loading) return <div className="flex min-h-[60vh] items-center justify-center"><Loader2 size={32} className="animate-spin text-primary" /></div>
@@ -725,10 +755,17 @@ export default function PracticePage() {
     <div className="mx-auto max-w-2xl p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <button onClick={() => router.push("/practice/hub")} className="text-muted-foreground hover:text-foreground transition"><ArrowLeft size={20} /></button>
+        <button
+          type="button"
+          aria-label="Back to practice hub"
+          onClick={() => router.push("/practice/hub")}
+          className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        >
+          <ArrowLeft size={20} aria-hidden="true" />
+        </button>
         <div className="flex items-center gap-3">
           <button onClick={() => setShowEngineSelector(!showEngineSelector)}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition rounded-md border border-border px-2 py-1" title="Speech recognition engine">
+            className="flex min-h-11 items-center gap-1.5 rounded-md border border-border px-3 text-xs text-muted-foreground transition hover:text-foreground" title="Speech recognition engine">
             <Settings2 size={12} /> {engineInfo?.name ?? "STT"}
             {engineInfo?.offline && <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1 rounded">offline</span>}
           </button>
@@ -844,7 +881,7 @@ export default function PracticePage() {
             <div className="pt-1">
               {(revealed || scores)
                 ? <p className="text-2xl font-bold text-primary">{currentVocab?.word}</p>
-                : <button onClick={() => setRevealed(true)} className="text-xs text-muted-foreground underline decoration-dotted hover:text-foreground">Reveal answer</button>}
+                : <button onClick={() => setRevealed(true)} className="min-h-11 rounded-lg px-3 text-xs text-muted-foreground underline decoration-dotted hover:bg-muted hover:text-foreground">Reveal answer</button>}
             </div>
           </>
         ) : stageMeta.mode === "listen" ? (
@@ -916,7 +953,7 @@ export default function PracticePage() {
               <Volume2 size={18} /> {speaking_ ? "Playing..." : "Play"}
             </button>
             <button onClick={handleListenStageComplete}
-              className="flex items-center gap-2 rounded-md border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground hover:bg-muted transition">
+              className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-5 text-sm font-medium text-foreground hover:bg-muted transition">
               Got it <ArrowRight size={14} />
             </button>
           </div>
@@ -925,7 +962,7 @@ export default function PracticePage() {
             <div className="flex items-center justify-center gap-4">
               {stageMeta.showListenButton && (
                 <button onClick={handleListen} disabled={speaking_ || recording}
-                  className="flex items-center gap-2 rounded-md border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground hover:bg-muted transition disabled:opacity-50">
+                  className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-5 text-sm font-medium text-foreground hover:bg-muted transition disabled:opacity-50">
                   <Volume2 size={16} /> {speaking_ ? "Playing..." : "Listen"}
                 </button>
               )}
@@ -981,10 +1018,10 @@ export default function PracticePage() {
             </p>
           </div>
           <div className="flex items-center justify-center gap-3">
-            <button onClick={() => { setListenDone(false); handleListen() }} className="flex items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition">
+            <button onClick={() => { setListenDone(false); handleListen() }} className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-4 text-sm font-medium text-foreground hover:bg-muted transition">
               <Volume2 size={14} /> Play again
             </button>
-            <button onClick={handleNext} className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition">
+            <button onClick={handleNext} className="flex min-h-11 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 transition">
               Next <ArrowRight size={14} />
             </button>
           </div>
@@ -1038,10 +1075,10 @@ export default function PracticePage() {
             />
           )}
           <div className="flex items-center justify-center gap-3">
-            <button onClick={handleRetry} className="flex items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition">
+            <button onClick={handleRetry} className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-4 text-sm font-medium text-foreground hover:bg-muted transition">
               <RotateCcw size={14} /> Try Again
             </button>
-            <button onClick={handleNext} className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition">
+            <button onClick={handleNext} className="flex min-h-11 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 transition">
               Next <ArrowRight size={14} />
             </button>
           </div>

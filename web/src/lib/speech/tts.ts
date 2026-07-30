@@ -15,6 +15,11 @@
 
 import { getTtsEngine, DEFAULT_TTS_ENGINE_ID } from './tts-factory';
 import type { TtsEngineId } from './tts-engines/types';
+import {
+  cancelTtsProviderSpeech,
+  speakWithTtsProviderFallback,
+  TtsProviderPolicyUnavailableError,
+} from './tts-provider-client';
 
 export interface TtsSettings {
   voice: string | null;       // engine-specific voice id / name
@@ -44,8 +49,11 @@ async function loadAdminSettings(): Promise<{ admin: TtsSettings; allowChoice: b
         volume: parseFloat(s.tts_default_volume ?? '1.0') || 1.0,
       };
       cachedAllowChoice = s.tts_allow_student_choice === 'true';
-      // Active engine — default to the bundled neural voice (Kokoro) when unset.
-      cachedActiveEngine = (s.active_tts_model as TtsEngineId) || DEFAULT_TTS_ENGINE_ID;
+      // Legacy neural ids are normalized to the system engine. Production
+      // neural speech is owned by the authenticated companion provider.
+      cachedActiveEngine = s.active_tts_model === 'browser-tts'
+        ? 'browser-tts'
+        : DEFAULT_TTS_ENGINE_ID;
       lastFetched = Date.now();
     }
   } catch { /* ignore */ }
@@ -103,7 +111,7 @@ export function invalidateTtsCache() {
   lastFetched = 0;
 }
 
-/** The active TTS engine id (admin `active_tts_model`, default Kokoro). */
+/** The legacy browser engine id. Neural local speech uses the companion policy. */
 export async function getActiveTtsEngineId(): Promise<TtsEngineId> {
   await loadAdminSettings();
   return cachedActiveEngine;
@@ -116,13 +124,8 @@ export async function getActiveTtsEngineId(): Promise<TtsEngineId> {
  * The Microsoft/system browser voice is ONLY an absolute last resort so the
  * student is never left in silence — it is never a silent default.
  */
-function ttsFallbackChain(active: TtsEngineId): TtsEngineId[] {
-  switch (active) {
-    case 'piper':       return ['piper', 'kokoro', 'browser-tts'];
-    case 'kokoro':      return ['kokoro', 'browser-tts'];
-    case 'browser-tts': return ['browser-tts'];
-    default:            return [active, 'kokoro', 'browser-tts'];
-  }
+function ttsFallbackChain(_active: TtsEngineId): TtsEngineId[] {
+  return ['browser-tts'];
 }
 
 /** Fires when a neural engine failed and we had to use a fallback, so the UI can
@@ -141,6 +144,17 @@ function emitTtsFallback(from: TtsEngineId, to: TtsEngineId) {
  */
 export async function speak(text: string, override?: Partial<TtsSettings>): Promise<void> {
   if (typeof window === 'undefined') return;
+  try {
+    await speakWithTtsProviderFallback(text, {
+      voice: override?.voice,
+      rate: override?.rate,
+      volume: override?.volume,
+    });
+    return;
+  } catch (providerError) {
+    if (!(providerError instanceof TtsProviderPolicyUnavailableError)) throw providerError;
+    console.warn('[tts] provider policy unavailable; trying explicit legacy settings:', providerError);
+  }
   const eff = await getEffectiveTtsSettings();
   const settings: TtsSettings = { ...eff, ...override };
   const engineId = await getActiveTtsEngineId();
@@ -161,21 +175,15 @@ export async function speak(text: string, override?: Partial<TtsSettings>): Prom
       console.warn(`[tts] engine "${id}" failed${i < chain.length - 1 ? ' — trying next' : ''}:`, e);
     }
   }
-  console.error('[tts] all engines failed for this utterance:', lastErr);
+  throw lastErr instanceof Error ? lastErr : new Error('All text-to-speech engines failed.');
 }
 
 /** Stop any in-progress speech immediately. */
 export function cancelSpeak(): void {
   if (typeof window === 'undefined') return;
+  cancelTtsProviderSpeech();
   try { getTtsEngine(cachedActiveEngine).cancel(); } catch { /* ignore */ }
   try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
-}
-
-/** Warm up the active engine's model so the first speak() is fast. */
-export async function prepareActiveTts(): Promise<void> {
-  if (typeof window === 'undefined') return;
-  const engineId = await getActiveTtsEngineId();
-  try { await getTtsEngine(engineId).prepare?.(); } catch { /* ignore */ }
 }
 
 /** List browser voices (loads asynchronously the first time). */

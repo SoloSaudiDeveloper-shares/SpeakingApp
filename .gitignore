@@ -28,6 +28,8 @@ node_modules/
 web/node_modules/
 web/.next/
 web/.test-cache/
+__pycache__/
+*.py[cod]
 dist/
 outputs/
 .railway/

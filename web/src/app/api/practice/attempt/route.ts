@@ -1,5 +1,4 @@
-import { cookies } from 'next/headers';
-import { getSessionFromToken } from '@/lib/actions/auth-actions';
+import { requireStudent } from '@/lib/auth/authorization';
 import { recordAttempt } from '@/lib/actions/practice-actions';
 import { recordAttemptKlpResults } from '@/lib/actions/klp-actions';
 import { gradeOpenResponseContent } from '@/lib/ai/content-grade';
@@ -14,6 +13,7 @@ import {
 import {
   books,
   cycles,
+  attempts,
   practiceTasks,
   studentCycles,
   students,
@@ -24,6 +24,22 @@ import { calculateScore, type CefrBand } from '@/lib/scoring/score-calculator';
 import { and, eq } from 'drizzle-orm';
 import { after } from 'next/server';
 import { drainXapiOutbox } from '@/lib/integrations/xapi';
+import {
+  PRACTICE_ATTEMPT_BODY_MAX_BYTES,
+  parseBoundedPracticePayload,
+} from '@/lib/security/practice-payload';
+import {
+  jsonBodyErrorResponse,
+  readBoundedJson,
+} from '@/lib/security/request-body';
+import {
+  consumeCloudAiBudgetIfNeeded,
+  consumePracticeAttemptBudget,
+  ResourceBudgetExceededError,
+  resourceBudgetResponse,
+} from '@/lib/security/resource-budget-server';
+import { mutationRequestViolation } from '@/lib/security/request-protection';
+import { practiceAttemptReplayPayload } from '@/lib/security/practice-attempt-replay';
 
 type PracticeStage = 'listen' | 'repeat' | 'read-aloud' | 'sentence' | 'free-speak' | 'review';
 
@@ -36,14 +52,22 @@ function coerceBand(value: unknown): CefrBand {
   return value === 'A2' || value === 'B1' || value === 'B2' ? value : 'A1';
 }
 
-function parseMetricsJson(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'string' || value.trim().length === 0) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
+function clientSubmissionId(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(value)) return '';
+  return value;
+}
+
+function legacyAudioPath(value: unknown, studentId: number): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const normalized = value.replaceAll('\\', '/').replace(/^\/+/, '');
+  if (
+    normalized.includes('..') ||
+    !normalized.startsWith(`${studentId}/`)
+  ) {
+    return '';
   }
+  return normalized;
 }
 
 function numericMetric(metrics: Record<string, unknown>, keys: string[], fallback = 0): number {
@@ -91,20 +115,20 @@ function asFluencyMetrics(metrics: Record<string, unknown>): FluencyMetrics | nu
 
 function parsePronunciationEvidence(value: unknown): PronunciationWeakWordEvidence[] {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
+  return value.slice(0, 50).flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
     const obj = item as Record<string, unknown>;
-    const word = typeof obj.word === 'string' ? obj.word.trim() : '';
+    const word = typeof obj.word === 'string' ? obj.word.trim().slice(0, 100) : '';
     const accuracy = finiteNumber(obj.accuracy);
-    const errorType = typeof obj.errorType === 'string' ? obj.errorType : '';
-    const stage = typeof obj.stage === 'string' ? obj.stage : '';
-    const capturedAt = typeof obj.capturedAt === 'string' ? obj.capturedAt : new Date().toISOString();
+    const errorType = typeof obj.errorType === 'string' ? obj.errorType.slice(0, 100) : '';
+    const stage = typeof obj.stage === 'string' ? obj.stage.slice(0, 50) : '';
+    const capturedAt = typeof obj.capturedAt === 'string' ? obj.capturedAt.slice(0, 64) : new Date().toISOString();
     if (!word || accuracy === null || !errorType || !stage) return [];
     const weakPhonemes = Array.isArray(obj.weakPhonemes)
-      ? obj.weakPhonemes.flatMap((phoneme) => {
+      ? obj.weakPhonemes.slice(0, 20).flatMap((phoneme) => {
           if (!phoneme || typeof phoneme !== 'object') return [];
           const p = phoneme as Record<string, unknown>;
-          const phonemeName = typeof p.phoneme === 'string' ? p.phoneme : '';
+          const phonemeName = typeof p.phoneme === 'string' ? p.phoneme.slice(0, 32) : '';
           const phonemeAccuracy = finiteNumber(p.accuracy);
           return phonemeName && phonemeAccuracy !== null ? [{ phoneme: phonemeName, accuracy: phonemeAccuracy }] : [];
         })
@@ -126,14 +150,25 @@ function coercePracticeStage(value: unknown): PracticeStage {
 
 export async function POST(request: Request) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('session-token')?.value;
-    if (!token) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
+    const violation = mutationRequestViolation(request);
+    if (violation) return Response.json({ error: 'Request is not allowed.' }, { status: 403 });
+    const auth = await requireStudent();
+    if (!auth.ok) return auth.response;
+    const user = auth.user;
+    const studentId = user.studentId!;
 
-    const user = await getSessionFromToken(token);
-    if (!user || !user.studentId) return Response.json({ error: 'Not authorized.' }, { status: 403 });
-
-    const body = await request.json();
+    const rawBody = await readBoundedJson(request, PRACTICE_ATTEMPT_BODY_MAX_BYTES);
+    const payload = parseBoundedPracticePayload(rawBody);
+    if (!payload.ok) return Response.json({ error: payload.error }, { status: 400 });
+    const body = payload.body;
+    const submissionId = clientSubmissionId(body.clientSubmissionId);
+    if (submissionId === '') {
+      return Response.json({ error: 'Invalid clientSubmissionId.' }, { status: 400 });
+    }
+    const audioPath = legacyAudioPath(body.audioPath, studentId);
+    if (audioPath === '') {
+      return Response.json({ error: 'Invalid audioPath.' }, { status: 400 });
+    }
     const cycleId = toPositiveInt(body.cycleId);
     const practiceTaskId = toPositiveInt(body.practiceTaskId);
     if (!cycleId || !practiceTaskId) {
@@ -143,10 +178,10 @@ export async function POST(request: Request) {
     const enrollment = ((await db
       .select()
       .from(studentCycles)
-      .where(and(eq(studentCycles.studentId, user.studentId), eq(studentCycles.cycleId, cycleId))).limit(1))[0]);
+      .where(and(eq(studentCycles.studentId, studentId), eq(studentCycles.cycleId, cycleId))).limit(1))[0]);
     if (!enrollment) return Response.json({ error: 'Not enrolled in this cycle.' }, { status: 403 });
 
-    const student = ((await db.select().from(students).where(eq(students.id, user.studentId)).limit(1))[0]);
+    const student = ((await db.select().from(students).where(eq(students.id, studentId)).limit(1))[0]);
     const cycle = ((await db.select().from(cycles).where(eq(cycles.id, cycleId)).limit(1))[0]);
     if (!cycle) return Response.json({ error: 'Cycle not found.' }, { status: 404 });
 
@@ -157,6 +192,29 @@ export async function POST(request: Request) {
       .where(and(eq(practiceTasks.id, practiceTaskId), eq(practiceTasks.bookId, cycle.bookId))).limit(1))[0]);
     if (!task) return Response.json({ error: 'Practice task not found for this cycle.' }, { status: 404 });
 
+    if (submissionId) {
+      const existingAttempt = (await db
+        .select()
+        .from(attempts)
+        .where(and(
+          eq(attempts.studentId, studentId),
+          eq(attempts.clientSubmissionId, submissionId),
+        ))
+        .limit(1))[0];
+      if (existingAttempt) {
+        if (
+          existingAttempt.cycleId !== cycleId ||
+          existingAttempt.practiceTaskId !== practiceTaskId
+        ) {
+          return Response.json(
+            { error: 'clientSubmissionId was already used for another attempt.' },
+            { status: 409 },
+          );
+        }
+        return Response.json(practiceAttemptReplayPayload(existingAttempt), { status: 200 });
+      }
+    }
+
     const vocabulary = task.vocabularyItemId
       ? ((await db.select().from(vocabularyItems).where(eq(vocabularyItems.id, task.vocabularyItemId)).limit(1))[0])
       : null;
@@ -166,16 +224,19 @@ export async function POST(request: Request) {
           .select()
           .from(wordMasteryRecords)
           .where(and(
-            eq(wordMasteryRecords.studentId, user.studentId),
+            eq(wordMasteryRecords.studentId, studentId),
             eq(wordMasteryRecords.vocabularyItemId, task.vocabularyItemId),
             eq(wordMasteryRecords.cycleId, cycleId),
           )).limit(1))[0])
       : null;
 
-    const transcript = typeof body.rawTranscript === 'string' ? body.rawTranscript : '';
-    const clientMetrics = parseMetricsJson(body.metricsJson);
+    const transcript = payload.transcript;
+    const clientMetrics = payload.metrics;
     const bodyDuration = finiteNumber(body.audioDurationSeconds) ?? finiteNumber(body.durationSeconds) ?? 0;
-    const durationSeconds = numericMetric(clientMetrics, ['audioDurationSeconds', 'durationSeconds'], bodyDuration);
+    const durationSeconds = Math.min(
+      600,
+      numericMetric(clientMetrics, ['audioDurationSeconds', 'durationSeconds'], bodyDuration),
+    );
     const practiceStage = coercePracticeStage(clientMetrics.practiceStage);
     const cefrBand = coerceBand(student?.cefrBand ?? book?.cefrLevel);
     const expectedAnswersJson =
@@ -183,17 +244,25 @@ export async function POST(request: Request) {
         ? JSON.stringify([vocabulary.exampleSentence])
         : task.expectedAnswers ?? (vocabulary?.word ? JSON.stringify([vocabulary.word]) : null);
 
+    await consumePracticeAttemptBudget(user.id);
+
     if (practiceStage === 'free-speak') {
       const metrics = asFluencyMetrics(clientMetrics) ?? computeFluencyMetrics({
         transcript,
         audioDurationSeconds: durationSeconds,
         cefrBand,
       });
-      const aiGrade = await gradeOpenResponseContent({
-        transcript,
-        topic: `Vocabulary Free Speak for "${vocabulary?.word ?? ''}". Judge coherence only; the app checks target vocabulary use separately.`,
-        fluencyMetrics: metrics,
-      });
+      let aiGrade = null;
+      try {
+        await consumeCloudAiBudgetIfNeeded(user.id);
+        aiGrade = await gradeOpenResponseContent({
+          transcript,
+          topic: `Vocabulary Free Speak for "${vocabulary?.word ?? ''}". Judge coherence only; the app checks target vocabulary use separately.`,
+          fluencyMetrics: metrics,
+        });
+      } catch (error) {
+        if (!(error instanceof ResourceBudgetExceededError)) throw error;
+      }
       const free = scoreFreeSpeak({
         transcript,
         targetText: vocabulary?.word ?? null,
@@ -208,11 +277,12 @@ export async function POST(request: Request) {
       });
 
       const result = await recordAttempt({
-        studentId: user.studentId,
+        studentId,
+        clientSubmissionId: submissionId,
         cycleId,
         bookId: cycle.bookId,
         practiceTaskId,
-        audioPath: typeof body.audioPath === 'string' ? body.audioPath : undefined,
+        audioPath,
         rawTranscript: transcript,
         targetMatchScore: free.scores.targetMatch,
         pronunciationScore: free.scores.pronunciation,
@@ -231,17 +301,26 @@ export async function POST(request: Request) {
           clientScoresIgnored: true,
         }),
       });
-      const klpResults = await recordAttemptKlpResults({
-        attemptId: result.id,
-        studentId: user.studentId,
-        practiceTaskId,
-        scores: free.scores,
-        passScore: task.passScore,
-        evidenceKind: 'answered',
-      });
-      after(() => drainXapiOutbox());
+      const klpResults = result.idempotentReplay
+        ? []
+        : await recordAttemptKlpResults({
+            attemptId: result.id,
+            studentId,
+            practiceTaskId,
+            scores: free.scores,
+            passScore: task.passScore,
+            evidenceKind: 'answered',
+          });
+      if (!result.idempotentReplay) after(() => drainXapiOutbox());
 
-      return Response.json({ attempt: result, score: free.scores, feedback: free.feedback, freeSpeak: free.metadata, klpResults });
+      return Response.json({
+        attempt: result,
+        score: free.scores,
+        feedback: free.feedback,
+        freeSpeak: free.metadata,
+        klpResults,
+        idempotentReplay: result.idempotentReplay,
+      }, { status: result.idempotentReplay ? 200 : 201 });
     }
 
     const score = calculateScore({
@@ -266,11 +345,12 @@ export async function POST(request: Request) {
     const feedback = generateFeedback(score, transcript, expectedList, durationSeconds);
 
     const result = await recordAttempt({
-      studentId: user.studentId,
+      studentId,
+      clientSubmissionId: submissionId,
       cycleId,
       bookId: cycle.bookId,
       practiceTaskId,
-      audioPath: typeof body.audioPath === 'string' ? body.audioPath : undefined,
+      audioPath,
       rawTranscript: transcript,
       targetMatchScore: score.targetMatch,
       pronunciationScore: score.pronunciation,
@@ -286,25 +366,37 @@ export async function POST(request: Request) {
         clientScoresIgnored: true,
       }),
     });
-    const klpResults = await recordAttemptKlpResults({
-      attemptId: result.id,
-      studentId: user.studentId,
-      practiceTaskId,
-      scores: {
-        targetMatch: score.targetMatch,
-        pronunciation: score.pronunciation,
-        fluency: score.fluency,
-        completeness: score.completeness,
-        consistency: score.consistency,
-        composite: score.composite,
-      },
-      passScore: task.passScore,
-      evidenceKind: practiceStage === 'review' ? 'reviewed' : 'answered',
-    });
-    after(() => drainXapiOutbox());
+    const klpResults = result.idempotentReplay
+      ? []
+      : await recordAttemptKlpResults({
+          attemptId: result.id,
+          studentId,
+          practiceTaskId,
+          scores: {
+            targetMatch: score.targetMatch,
+            pronunciation: score.pronunciation,
+            fluency: score.fluency,
+            completeness: score.completeness,
+            consistency: score.consistency,
+            composite: score.composite,
+          },
+          passScore: task.passScore,
+          evidenceKind: practiceStage === 'review' ? 'reviewed' : 'answered',
+        });
+    if (!result.idempotentReplay) after(() => drainXapiOutbox());
 
-    return Response.json({ attempt: result, score, feedback, klpResults });
+    return Response.json({
+      attempt: result,
+      score,
+      feedback,
+      klpResults,
+      idempotentReplay: result.idempotentReplay,
+    }, { status: result.idempotentReplay ? 200 : 201 });
   } catch (error) {
+    const bodyResponse = jsonBodyErrorResponse(error);
+    if (bodyResponse) return bodyResponse;
+    const budgetResponse = resourceBudgetResponse(error);
+    if (budgetResponse) return budgetResponse;
     console.error('Practice attempt save error:', error);
     return Response.json({ error: 'Internal server error.' }, { status: 500 });
   }

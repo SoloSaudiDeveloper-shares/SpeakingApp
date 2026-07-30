@@ -30,6 +30,7 @@ export class PiperTtsEngine implements TtsEngine {
   readonly id = "piper" as const
   readonly name = "Piper (offline)"
   readonly isOffline = true
+  private speakGeneration = 0
 
   isAvailable(): boolean {
     return typeof window !== "undefined"
@@ -48,18 +49,30 @@ export class PiperTtsEngine implements TtsEngine {
   }
 
   async prepare(): Promise<void> {
-    // Warm up the default voice (downloads the model on first run, then cached).
-    try { await this.getSession(DEFAULT_VOICE) } catch { /* surfaced on speak() */ }
+    // Explicit installation warms and caches the selected local model.
+    await this.getSession(DEFAULT_VOICE)
   }
 
   async speak(text: string, opts?: SpeakOptions): Promise<void> {
+    const generation = ++this.speakGeneration
+    if (opts?.signal?.aborted) throw opts.signal.reason
     const voiceId = opts?.voice && VOICES.some((v) => v.id === opts.voice) ? opts.voice : DEFAULT_VOICE
     const s = await this.getSession(voiceId)
+    if (opts?.signal?.aborted) throw opts.signal.reason
     const blob: Blob = await s.predict(text)
-    await playBlob(blob, { volume: opts?.volume ?? 1, rate: opts?.rate ?? 1 })
+    if (generation !== this.speakGeneration) {
+      throw new DOMException("Speech was superseded.", "AbortError")
+    }
+    if (opts?.signal?.aborted) throw opts.signal.reason
+    await playBlob(blob, {
+      volume: opts?.volume ?? 1,
+      rate: opts?.rate ?? 1,
+      signal: opts?.signal,
+    })
   }
 
   cancel(): void {
+    this.speakGeneration += 1
     stopPlayback()
   }
 }

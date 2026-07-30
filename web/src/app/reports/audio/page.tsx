@@ -89,7 +89,7 @@ export default function AudioArchivePage() {
                 </p>
               )}
               <audio controls className="w-full">
-                <source src={`/api/audio/${attempt.audioPath}`} />
+                <source src={`/api/attempts/${attempt.id}/audio`} />
               </audio>
             </div>
           ))}

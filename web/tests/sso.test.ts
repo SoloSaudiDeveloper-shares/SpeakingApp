@@ -48,6 +48,22 @@ describe('signed SAIF launches', () => {
     expect(() => verifySignedLaunchToken(sign({ role: 'Admin' }), config, now)).toThrow('admin');
   });
 
+  test('rejects excessive, non-increasing, fractional, and weakly configured launches', () => {
+    const sign = (overrides: Partial<ExternalLaunchPayload>) =>
+      createSignedLaunchToken({ ...payload, ...overrides }, secret);
+
+    expect(() => verifySignedLaunchToken(sign({ exp: now + 121 }), config, now))
+      .toThrow('lifetime is too long');
+    expect(() => verifySignedLaunchToken(sign({ iat: now + 20, exp: now + 10 }), config, now))
+      .toThrow('invalid lifetime');
+    expect(() => verifySignedLaunchToken(sign({ iat: now + 0.5 }), config, now))
+      .toThrow('invalid timestamps');
+    expect(() => verifySignedLaunchToken(sign({}), {
+      ...config,
+      sharedSecret: 'too-short',
+    }, now)).toThrow('not fully configured');
+  });
+
   test('permits only local non-API redirect paths', () => {
     expect(isSafeRedirectPath('/dashboard')).toBe(true);
     expect(isSafeRedirectPath('/practice/scenario')).toBe(true);

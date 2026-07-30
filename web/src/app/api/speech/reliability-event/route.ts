@@ -3,9 +3,15 @@ import { getSessionFromToken } from '@/lib/actions/auth-actions';
 import { recordSpeechReliabilityEvent, type SpeechReliabilityEventType } from '@/lib/actions/speech-reliability-actions';
 
 const BLOCKED_BODY_KEYS = /transcript|audio|blob|file|key|token|secret|providerBody|raw/i;
+const SAFE_TTS_METADATA_KEYS = new Set([
+  'audio_bytes',
+  'ttfb_ms',
+  'total_ms',
+  'stream_outcome',
+]);
 
 function eventType(value: unknown): SpeechReliabilityEventType {
-  return value === 'pronunciation' || value === 'recording' ? value : 'stt';
+  return value === 'pronunciation' || value === 'recording' || value === 'tts' ? value : 'stt';
 }
 
 function stringValue(value: unknown) {
@@ -17,10 +23,10 @@ function numberValue(value: unknown) {
   return Number.isFinite(n) ? n : null;
 }
 
-function assertNoSensitiveKeys(value: unknown) {
+function assertNoSensitiveKeys(value: unknown, safeKeys = new Set<string>()) {
   if (!value || typeof value !== 'object') return;
   for (const key of Object.keys(value)) {
-    if (BLOCKED_BODY_KEYS.test(key)) {
+    if (BLOCKED_BODY_KEYS.test(key) && !safeKeys.has(key)) {
       throw new Error(`Reliability telemetry must not include "${key}".`);
     }
   }
@@ -37,7 +43,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== 'object') return Response.json({ error: 'Invalid event.' }, { status: 400 });
     assertNoSensitiveKeys(body);
-    assertNoSensitiveKeys((body as Record<string, unknown>).metadata);
+    assertNoSensitiveKeys((body as Record<string, unknown>).metadata, SAFE_TTS_METADATA_KEYS);
 
     const event = await recordSpeechReliabilityEvent({
       userId: user.id,

@@ -12,7 +12,7 @@ import {
 } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import { hashPassword } from './auth-actions';
-import { MIN_PASSWORD_LENGTH } from '../utils/password';
+import { assertPasswordPolicy } from '../utils/password';
 import { isSecretLikeSettingKey } from '../secrets/sensitive-setting';
 import { userAccounts, sessions } from '../db/schema';
 
@@ -70,9 +70,7 @@ export async function getTeacherAccounts() {
 }
 
 export async function resetTeacherPasswordAndActivate(id: number, password: string) {
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`Password must contain at least ${MIN_PASSWORD_LENGTH} characters.`);
-  }
+  assertPasswordPolicy(password);
 
   return db.transaction(async (tx) => {
     const [account] = await tx
@@ -133,9 +131,11 @@ export async function createStudent(data: {
   cefrBand?: string;
   password?: string;
 }) {
-  if (!data.password || data.password.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`A temporary password of at least ${MIN_PASSWORD_LENGTH} characters is required.`);
-  }
+  if (!data.password) throw new Error('A temporary password is required.');
+  assertPasswordPolicy(data.password, {
+    username: data.uniqueNumber,
+    displayName: data.fullName,
+  });
 
   return db.transaction(async (tx) => {
     const [student] = await tx
@@ -177,9 +177,7 @@ export async function updateStudent(
     resetDiagnostic?: boolean;
   },
 ) {
-  if (data.password && data.password.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`Password must contain at least ${MIN_PASSWORD_LENGTH} characters.`);
-  }
+  if (data.password) assertPasswordPolicy(data.password);
 
   const updates: Record<string, unknown> = {};
   if (data.fullName !== undefined) updates.fullName = data.fullName;

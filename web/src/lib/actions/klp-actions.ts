@@ -18,6 +18,7 @@ import {
   vocabularyItems,
 } from '@/lib/db/schema';
 import { callChat } from '@/lib/ai/providers';
+import { consumeCloudAiBudgetIfNeeded } from '@/lib/security/resource-budget-server';
 import { enqueueXapiForKlpResult, type XapiEvidenceKind } from '@/lib/integrations/xapi';
 import { getKlpAssignmentsForStudent } from '@/lib/actions/homework-actions';
 import { parseAlcKlpWorkbook, type KlpSupportStatus, type ParsedKlpWorkbook } from '@/lib/klp/xlsx';
@@ -411,6 +412,9 @@ export async function generateKlpScenario(data: {
   const progressionMode = normalizeProgressionMode(data.progressionMode);
   let draft: ReturnType<typeof fallbackScenario>;
   try {
+    if (data.createdByUserId) {
+      await consumeCloudAiBudgetIfNeeded(data.createdByUserId);
+    }
     const result = await callChat([
       { role: 'system', content: 'You create concise English-speaking role-play scenarios for a language lab. Return only strict JSON.' },
       { role: 'user', content: scenarioPromptFromConcepts(concepts, data.cefrLevel, progressionMode) },

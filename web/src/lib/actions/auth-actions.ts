@@ -3,7 +3,12 @@ import { db } from '../db';
 import { userAccounts, sessions, students, cycles, studentCycles } from '../db/schema';
 import { eq, and, desc, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { hashPassword, MIN_PASSWORD_LENGTH, verifyPassword } from '../utils/password';
+import {
+  assertPasswordPolicy,
+  hashPassword,
+  passwordHashNeedsUpgrade,
+  verifyPassword,
+} from '../utils/password';
 import { createHash } from 'crypto';
 
 export { hashPassword, verifyPassword };
@@ -16,6 +21,11 @@ export type SessionUser = {
   displayName: string | null;
   mustChangePassword: boolean;
 };
+
+// A real current-format hash keeps unknown/disabled-account login work close
+// to the cost of a wrong password for an existing account.
+const DUMMY_PASSWORD_HASH =
+  'pbkdf2-sha512$220000$c3BlYWtpbmdsYWJkdW1teQ==$5nKUk5T1X6faz922ZIqPvh8mJOvyy2smK+oFpvWSOl0PleJKD0dHnEmjGdfWjuA+0DOLyk/r0rJ1oSLpyj0tcA==';
 
 export function hashSessionToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
@@ -30,8 +40,16 @@ export async function login(
     .from(userAccounts)
     .where(and(eq(userAccounts.username, username), eq(userAccounts.isActive, true))).limit(1))[0]);
 
-  if (!user) return null;
+  if (!user) {
+    verifyPassword(password, DUMMY_PASSWORD_HASH);
+    return null;
+  }
   if (!verifyPassword(password, user.passwordHash)) return null;
+  if (passwordHashNeedsUpgrade(user.passwordHash)) {
+    await db.update(userAccounts)
+      .set({ passwordHash: hashPassword(password) })
+      .where(eq(userAccounts.id, user.id));
+  }
 
   // Generate session token
   const token = nanoid(48);
@@ -68,10 +86,8 @@ export async function register(
   password: string,
   fullName: string,
   studentClass?: string
-): Promise<{ user: SessionUser; token: string } | null> {
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`Password must contain at least ${MIN_PASSWORD_LENGTH} characters.`);
-  }
+): Promise<SessionUser | null> {
+  assertPasswordPolicy(password, { username, displayName: fullName });
 
   // Check if username already exists
   const existing = ((await db
@@ -110,28 +126,15 @@ export async function register(
     })
     .returning());
 
-  // Generate session
-  const token = nanoid(48);
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + 7);
-
-  (await db.insert(sessions)
-    .values({
-      tokenHash: hashSessionToken(token),
-      userId: user.id,
-      expiresAt: expiresAt.toISOString(),
-    }));
-
+  // Registration redirects to sign-in. Do not create a discarded bearer
+  // session here; the login path creates one only after credential proof.
   return {
-    user: {
-      id: user.id,
-      username: user.username,
-      role: user.role,
-      studentId: user.studentId,
-      displayName: user.displayName,
-      mustChangePassword: user.mustChangePassword,
-    },
-    token,
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    studentId: user.studentId,
+    displayName: user.displayName,
+    mustChangePassword: user.mustChangePassword,
   };
 }
 
@@ -220,6 +223,10 @@ export async function changePassword(
   if (!user) return false;
   if (!verifyPassword(currentPassword, user.passwordHash)) return false;
 
+  assertPasswordPolicy(newPassword, {
+    username: user.username,
+    displayName: user.displayName ?? undefined,
+  });
   const newHash = hashPassword(newPassword);
   await db.transaction(async (tx) => {
     await tx.update(userAccounts)

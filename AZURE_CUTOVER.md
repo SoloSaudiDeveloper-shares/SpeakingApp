@@ -45,9 +45,20 @@ az deployment group create `
   --parameters infra/main.bicepparam
 ```
 
-The template creates one always-ready 1-vCPU/2-GiB Container App, PostgreSQL 17
-`Standard_B1ms` with 32 GiB and 14-day PITR, private Blob Storage, ACR Basic, Key Vault,
-Log Analytics, and migration/xAPI/backup jobs. PostgreSQL and Blob traffic stay private.
+The template creates a cost-first 1-vCPU/2-GiB Container App that scales from zero to two
+replicas at ten concurrent requests per replica, PostgreSQL 17 `Standard_B1ms` with 32 GiB
+and 30-day PITR, private recording/backup Blob Storage, a separate blob-read-only public
+model account, ACR Basic, Key Vault, Log Analytics, workspace-based Application Insights,
+and migration/backup/delivery-probe jobs. The scheduled xAPI job does not exist until its
+endpoint and credentials are complete and `XAPI_ENABLED=true`. PostgreSQL and private Blob
+traffic stay private.
+
+Production uses separate web and jobs managed identities. The web identity can
+write only the dedicated provider-settings vault and private audio container;
+operational database/SSO/job secrets remain read-only. The jobs identity has
+read-only vault access plus data access scoped to the audio and backup
+containers. Do not collapse these roles into one whole-vault or whole-storage
+contributor.
 
 ## 4. Rotate and configure providers
 
@@ -103,10 +114,27 @@ audio, credentials, or importer into the application/jobs images or a public CI 
 
 ## 6. Release and smoke tests
 
-After the `PostgreSQL release gates` workflow succeeds for `main`, the deployment workflow
-checks out that exact tested SHA, builds immutable images, pushes them to ACR, runs a logical
-backup, executes migrations, deploys one new revision, checks `/api/health/ready`, and restores
-the prior image on failure. A failing or incomplete CI run cannot trigger deployment.
+After the `PostgreSQL release gates` workflow succeeds for `main`, it uploads the exact
+application and jobs image archives that passed the tests, publishes those archives under the
+commit SHA without rebuilding, and records their registry digests plus a CycloneDX SBOM. The
+deployment workflow resolves those immutable digests, runs a logical backup, executes migrations,
+deploys one new revision, checks `/api/health/ready`, and restores the prior digest on failure.
+A failing, incomplete, or rebuilt candidate cannot trigger deployment.
+The SHA-tagged GHCR application and jobs packages must be public. Deployment
+intentionally performs anonymous pulls before changing Azure, matching the
+credential-free Container Apps configuration; a private package fails closed.
+
+The scheduled delivery probe exercises a cold and warm authenticated 2 MiB application response
+daily and records status, TTFB, total transfer time, and bytes. It then downloads the model
+manifest's nominated large probe object and verifies its SHA-256 digest. This complements readiness
+checks; a fast response-start is not treated as proof that a body arrived. Set the production
+environment variable `AZURE_DELIVERY_PROBE_JOB` so releases update and roll back this job too.
+
+Publish Kokoro assets with `Publish signed voice models`. The production environment needs
+`AZURE_MODEL_STORAGE_ACCOUNT`, an OIDC identity with Blob Data Contributor on that account, and an
+ECDSA `VOICE_MODEL_SIGNING_KEY_PEM` secret. The workflow uploads versioned paths, signs and promotes
+the manifest pointer, and verifies both the signature and largest model object after promotion.
+Pin the public-key fingerprint printed by the workflow before enabling model activation.
 
 Before DNS cutover verify Admin/Teacher/Student authorization, forced password changes,
 Practice/Progress tabs, pathway unlocking, scenario finish behavior, 90-second speech capture,

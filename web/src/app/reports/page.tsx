@@ -565,7 +565,7 @@ export default function ReportsPage() {
                 <div className={`text-sm font-bold ${tone(attempt.score)}`}>{pct(attempt.score)}</div>
               </div>
               <audio controls className="w-full">
-                <source src={`/api/audio/${attempt.audioPath}`} />
+                <source src={`/api/attempts/${attempt.id}/audio`} />
               </audio>
             </div>
           ))}

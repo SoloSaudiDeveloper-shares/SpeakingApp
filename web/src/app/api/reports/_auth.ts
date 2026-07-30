@@ -1,16 +1,14 @@
-import { cookies } from 'next/headers';
-import { getSessionFromToken } from '@/lib/actions/auth-actions';
+import { requireAuthenticated } from '@/lib/auth/authorization';
 
 export async function requireReportUser() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get('session-token')?.value;
-  if (!token) return { error: 'Not authenticated.', status: 401 } as const;
-  const user = await getSessionFromToken(token);
-  if (!user) return { error: 'Session expired.', status: 401 } as const;
-  if (user.role !== 'Admin' && user.role !== 'Teacher') {
-    return { error: 'Not authorized.', status: 403 } as const;
+  const auth = await requireAuthenticated({ roles: ['Admin', 'Teacher'] });
+  if (!auth.ok) {
+    return {
+      error: auth.response.status === 401 ? 'Not authenticated.' : 'Not authorized.',
+      status: auth.response.status,
+    } as const;
   }
-  return { user } as const;
+  return { user: auth.user } as const;
 }
 
 export function filtersFromUrl(request: Request) {
