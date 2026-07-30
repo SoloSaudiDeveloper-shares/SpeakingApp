@@ -14,6 +14,9 @@ import { hashPassword } from '@/lib/utils/password';
 import { getCurrentCycle, getStudentAttempts, getWordMastery } from '@/lib/actions/practice-actions';
 import { hashSessionToken } from '@/lib/actions/auth-actions';
 
+type ExternalAuthTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type ExternalAuthDatabase = Pick<ExternalAuthTransaction, 'select' | 'insert' | 'update' | 'delete'>;
+
 export type ExternalRole = 'Student' | 'Teacher' | 'Admin';
 
 export interface ExternalSsoConfig {
@@ -178,18 +181,24 @@ function externalUsername(provider: string, subject: string): string {
   return `${provider}:${subject}`;
 }
 
-async function chooseUniqueNumber(input: ExternalUserInput): Promise<string> {
+async function chooseUniqueNumber(
+  input: ExternalUserInput,
+  database: ExternalAuthDatabase = db,
+): Promise<string> {
   // The signed pseudonymous `sub` is the only SAIF learner key. Never use a
   // display name, email, or unsigned alternate student-number claim for linking.
   const preferred = input.subject.trim();
-  const existing = ((await db.select().from(students).where(eq(students.uniqueNumber, preferred)).limit(1))[0]);
+  const existing = ((await database.select().from(students).where(eq(students.uniqueNumber, preferred)).limit(1))[0]);
   if (!existing) return preferred;
   const fallback = externalUsername(input.provider, input.subject);
-  const existingFallback = ((await db.select().from(students).where(eq(students.uniqueNumber, fallback)).limit(1))[0]);
+  const existingFallback = ((await database.select().from(students).where(eq(students.uniqueNumber, fallback)).limit(1))[0]);
   return existingFallback ? `${fallback}:${nanoid(8)}` : fallback;
 }
 
-export async function upsertExternalUser(input: ExternalUserInput) {
+export async function upsertExternalUser(
+  input: ExternalUserInput,
+  database: ExternalAuthDatabase = db,
+) {
   const now = new Date().toISOString();
   const provider = input.provider.trim();
   const subject = input.subject.trim();
@@ -201,30 +210,30 @@ export async function upsertExternalUser(input: ExternalUserInput) {
     throw new IntegrationError('External admin provisioning is disabled.', 403);
   }
 
-  const identity = ((await db
+  const identity = ((await database
     .select()
     .from(externalIdentities)
     .where(and(eq(externalIdentities.provider, provider), eq(externalIdentities.subject, subject))).limit(1))[0]);
 
   if (identity) {
-    const user = ((await db.select().from(userAccounts).where(eq(userAccounts.id, identity.userAccountId)).limit(1))[0]);
+    const user = ((await database.select().from(userAccounts).where(eq(userAccounts.id, identity.userAccountId)).limit(1))[0]);
     if (!user) throw new IntegrationError('Linked local user was not found.', 404);
 
     let studentId = user.studentId;
     if (role === 'Student') {
       if (studentId) {
-        (await db.update(students)
+        (await database.update(students)
           .set({ fullName: input.displayName, class: input.className ?? null, isActive: true })
           .where(eq(students.id, studentId)));
       } else {
-        const stableStudent = ((await db.select().from(students).where(eq(students.uniqueNumber, subject)).limit(1))[0]);
+        const stableStudent = ((await database.select().from(students).where(eq(students.uniqueNumber, subject)).limit(1))[0]);
         if (stableStudent) {
           studentId = stableStudent.id;
-          (await db.update(students).set({ class: input.className ?? stableStudent.class, isActive: true }).where(eq(students.id, studentId)));
+          (await database.update(students).set({ class: input.className ?? stableStudent.class, isActive: true }).where(eq(students.id, studentId)));
         } else {
-        const [student] = (await db.insert(students)
+        const [student] = (await database.insert(students)
           .values({
-            uniqueNumber: await chooseUniqueNumber(input),
+            uniqueNumber: await chooseUniqueNumber(input, database),
             fullName: input.displayName,
             class: input.className ?? null,
             cefrBand: 'A1',
@@ -238,7 +247,7 @@ export async function upsertExternalUser(input: ExternalUserInput) {
       studentId = null;
     }
 
-    (await db.update(userAccounts)
+    (await database.update(userAccounts)
       .set({
         role,
         studentId,
@@ -247,7 +256,7 @@ export async function upsertExternalUser(input: ExternalUserInput) {
         lastLoginAt: now,
       })
       .where(eq(userAccounts.id, user.id)));
-    (await db.update(externalIdentities)
+    (await database.update(externalIdentities)
       .set({ role, updatedAt: now, lastLoginAt: now })
       .where(eq(externalIdentities.id, identity.id)));
 
@@ -262,18 +271,18 @@ export async function upsertExternalUser(input: ExternalUserInput) {
 
   const username = role === 'Student' ? subject : externalUsername(provider, subject);
   const stableStudent = role === 'Student'
-    ? ((await db.select().from(students).where(eq(students.uniqueNumber, subject)).limit(1))[0])
+    ? ((await database.select().from(students).where(eq(students.uniqueNumber, subject)).limit(1))[0])
     : null;
-  const existingUser = ((await db.select().from(userAccounts).where(eq(userAccounts.username, username)).limit(1))[0])
-    ?? (stableStudent ? ((await db.select().from(userAccounts).where(eq(userAccounts.studentId, stableStudent.id)).limit(1))[0]) : undefined);
+  const existingUser = ((await database.select().from(userAccounts).where(eq(userAccounts.username, username)).limit(1))[0])
+    ?? (stableStudent ? ((await database.select().from(userAccounts).where(eq(userAccounts.studentId, stableStudent.id)).limit(1))[0]) : undefined);
   if (existingUser) {
     let studentId = existingUser.studentId;
     if (role === 'Student' && !studentId && stableStudent) {
       studentId = stableStudent.id;
     } else if (role === 'Student' && !studentId) {
-      const [student] = (await db.insert(students)
+      const [student] = (await database.insert(students)
         .values({
-          uniqueNumber: await chooseUniqueNumber(input),
+          uniqueNumber: await chooseUniqueNumber(input, database),
           fullName: input.displayName,
           class: input.className ?? null,
           cefrBand: 'A1',
@@ -283,14 +292,14 @@ export async function upsertExternalUser(input: ExternalUserInput) {
       studentId = student.id;
     }
     if (role === 'Student' && studentId) {
-      (await db.update(students)
+      (await database.update(students)
         .set({ fullName: input.displayName, class: input.className ?? null, isActive: true })
         .where(eq(students.id, studentId)));
     }
-    (await db.update(userAccounts)
+    (await database.update(userAccounts)
       .set({ role, studentId: role === 'Student' ? studentId : null, displayName: input.displayName, isActive: true, lastLoginAt: now })
       .where(eq(userAccounts.id, existingUser.id)));
-    (await db.insert(externalIdentities)
+    (await database.insert(externalIdentities)
       .values({
         provider,
         subject,
@@ -311,9 +320,9 @@ export async function upsertExternalUser(input: ExternalUserInput) {
 
   let studentId: number | null = stableStudent?.id ?? null;
   if (role === 'Student' && !studentId) {
-    const [student] = (await db.insert(students)
+    const [student] = (await database.insert(students)
       .values({
-        uniqueNumber: await chooseUniqueNumber(input),
+        uniqueNumber: await chooseUniqueNumber(input, database),
         fullName: input.displayName,
         class: input.className ?? null,
         cefrBand: 'A1',
@@ -323,7 +332,7 @@ export async function upsertExternalUser(input: ExternalUserInput) {
     studentId = student.id;
   }
 
-  const [user] = (await db.insert(userAccounts)
+  const [user] = (await database.insert(userAccounts)
     .values({
       username,
       passwordHash: hashPassword(nanoid(48)),
@@ -336,7 +345,7 @@ export async function upsertExternalUser(input: ExternalUserInput) {
     })
     .returning());
 
-  (await db.insert(externalIdentities)
+  (await database.insert(externalIdentities)
     .values({
       provider,
       subject,
@@ -356,30 +365,38 @@ export async function upsertExternalUser(input: ExternalUserInput) {
   };
 }
 
-export async function createSessionForUser(userId: number): Promise<string> {
+export async function createSessionForUser(
+  userId: number,
+  database: ExternalAuthDatabase = db,
+): Promise<string> {
   const token = nanoid(48);
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 7);
-  (await db.insert(sessions)
+  (await database.insert(sessions)
     .values({ tokenHash: hashSessionToken(token), userId, expiresAt: expiresAt.toISOString() }));
   return token;
 }
 
-export async function consumeLaunchJti(provider: string, jti: string, userAccountId: number, exp: number) {
-  const existing = ((await db
-    .select()
-    .from(externalSsoLaunches)
-    .where(and(eq(externalSsoLaunches.provider, provider), eq(externalSsoLaunches.jti, jti))).limit(1))[0]);
-  if (existing) throw new IntegrationError('Launch token has already been used.', 401);
-
-  (await db.insert(externalSsoLaunches)
+async function reserveLaunchJti(
+  database: ExternalAuthDatabase,
+  provider: string,
+  jti: string,
+  exp: number,
+) {
+  const [reservation] = (await database.insert(externalSsoLaunches)
     .values({
       provider,
       jti,
-      userAccountId,
+      userAccountId: null,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(exp * 1000).toISOString(),
-    }));
+    })
+    .onConflictDoNothing({
+      target: [externalSsoLaunches.provider, externalSsoLaunches.jti],
+    })
+    .returning({ id: externalSsoLaunches.id }));
+  if (!reservation) throw new IntegrationError('Launch token has already been used.', 401);
+  return reservation.id;
 }
 
 export async function launchExternalSso(token: string) {
@@ -388,23 +405,35 @@ export async function launchExternalSso(token: string) {
   const role = normalizeRole(String(payload.role));
   if (!role) throw new IntegrationError('Launch token role is not allowed.', 403);
 
-  const user = await upsertExternalUser({
-    provider: config.providerId,
-    subject: payload.sub,
-    role,
-    displayName: payload.displayName,
-    email: payload.email,
-    studentNumber: payload.studentNumber,
-    className: payload.className,
-    classId: payload.classId,
+  return db.transaction(async (transaction) => {
+    // Reserve the one-time identifier before any account mutation. The unique
+    // constraint makes concurrent replays wait and fail without side effects.
+    const reservationId = await reserveLaunchJti(
+      transaction,
+      config.providerId,
+      payload.jti,
+      payload.exp,
+    );
+    const user = await upsertExternalUser({
+      provider: config.providerId,
+      subject: payload.sub,
+      role,
+      displayName: payload.displayName,
+      email: payload.email,
+      studentNumber: payload.studentNumber,
+      className: payload.className,
+      classId: payload.classId,
+    }, transaction);
+    await transaction
+      .update(externalSsoLaunches)
+      .set({ userAccountId: user.id })
+      .where(eq(externalSsoLaunches.id, reservationId));
+    return {
+      user,
+      token: await createSessionForUser(user.id, transaction),
+      redirectTo: isSafeRedirectPath(payload.redirectTo) ? payload.redirectTo : '/dashboard',
+    };
   });
-
-  await consumeLaunchJti(config.providerId, payload.jti, user.id, payload.exp);
-  return {
-    user,
-    token: await createSessionForUser(user.id),
-    redirectTo: isSafeRedirectPath(payload.redirectTo) ? payload.redirectTo : '/dashboard',
-  };
 }
 
 export async function findExternalIdentity(provider: string, subject: string) {

@@ -2,6 +2,11 @@
 
 This app can run standalone with its built-in login, or a custom portal can launch users into it with a short-lived signed JWT.
 
+For the joint SAIF programmer handover, contract traceability, sandbox verification,
+and Azure cutover sequence, use
+[`integration/SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md`](integration/SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md).
+The present document is the generic application interface reference.
+
 ## SSO Launch
 
 Portal link:

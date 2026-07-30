@@ -178,6 +178,9 @@ The same credential powers Azure Speech-to-text and phoneme-level pronunciation 
 ## SAIF LRS
 
 Do not enable the real integration until SAIF supplies sandbox/trial onboarding data and the pinned contract is reconfirmed.
+Follow the joint programmer sequence in
+[`SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md`](./SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md);
+this section focuses on credential handling.
 
 ### Request from SAIF
 

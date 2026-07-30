@@ -41,10 +41,44 @@ param bootstrapAdministratorPassword string
 @minLength(24)
 param xapiJobToken string
 
+@description('Enable signed SAIF launch SSO only after the issuer and shared secret have been agreed.')
+param externalSsoEnabled bool = false
+
+@description('Stable identifier used for SAIF identity links and replay protection.')
+param externalSsoProviderId string = 'saif'
+
+@description('Exact JWT issuer supplied by SAIF. Leave empty while SSO is disabled.')
+param externalSsoIssuer string = ''
+
+@description('Exact JWT audience for Speaking Lab.')
+param externalSsoAudience string = 'speaking-lab'
+
+@secure()
+@description('HS256 launch secret exchanged out of band. Leave empty while SSO is disabled.')
+param externalSsoSharedSecret string = ''
+
+@description('Enable delivery from the PostgreSQL xAPI outbox only after SAIF LRS onboarding.')
+param xapiEnabled bool = false
+
+@description('SAIF LRS statements endpoint. Leave empty while xAPI delivery is disabled.')
+param xapiLrsUrl string = ''
+
+@secure()
+@description('SAIF LRS Basic Auth username. Leave empty while xAPI delivery is disabled.')
+param xapiUsername string = ''
+
+@secure()
+@description('SAIF LRS Basic Auth password. Leave empty while xAPI delivery is disabled.')
+param xapiPassword string = ''
+
 var environmentName = '${prefix}-trial-env'
 var appName = '${prefix}-app'
 var audioContainerName = 'speaking-audio'
 var backupContainerName = 'database-backups'
+var externalSsoConfigurationComplete = !empty(externalSsoIssuer) && !empty(externalSsoAudience) && length(externalSsoSharedSecret) >= 32
+var xapiConfigurationComplete = !empty(xapiLrsUrl) && !empty(xapiUsername) && !empty(xapiPassword)
+var effectiveExternalSsoEnabled = externalSsoEnabled && externalSsoConfigurationComplete
+var effectiveXapiEnabled = xapiEnabled && xapiConfigurationComplete
 
 resource network 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
   name: virtualNetworkName
@@ -91,6 +125,30 @@ resource xapiJobSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   }
 }
 
+resource externalSsoSharedSecretKv 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(externalSsoSharedSecret)) {
+  parent: vault
+  name: 'speaking-lab-external-sso-shared-secret'
+  properties: {
+    value: externalSsoSharedSecret
+  }
+}
+
+resource xapiUsernameKv 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(xapiUsername)) {
+  parent: vault
+  name: 'speaking-lab-xapi-username'
+  properties: {
+    value: xapiUsername
+  }
+}
+
+resource xapiPasswordKv 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(xapiPassword)) {
+  parent: vault
+  name: 'speaking-lab-xapi-password'
+  properties: {
+    value: xapiPassword
+  }
+}
+
 resource environment 'Microsoft.App/managedEnvironments@2025-01-01' = {
   name: environmentName
   location: location
@@ -102,6 +160,66 @@ resource environment 'Microsoft.App/managedEnvironments@2025-01-01' = {
     zoneRedundant: false
   }
 }
+
+var applicationSecrets = concat(
+  [
+    {
+      name: 'database-url'
+      keyVaultUrl: databaseUrlSecret.properties.secretUri
+      identity: identity.id
+    }
+  ],
+  !empty(externalSsoSharedSecret) ? [
+    {
+      name: 'external-sso-shared-secret'
+      keyVaultUrl: externalSsoSharedSecretKv!.properties.secretUri
+      identity: identity.id
+    }
+  ] : [],
+  !empty(xapiUsername) && !empty(xapiPassword) ? [
+    {
+      name: 'xapi-username'
+      keyVaultUrl: xapiUsernameKv!.properties.secretUri
+      identity: identity.id
+    }
+    {
+      name: 'xapi-password'
+      keyVaultUrl: xapiPasswordKv!.properties.secretUri
+      identity: identity.id
+    }
+  ] : []
+)
+
+var applicationEnvironment = concat(
+  [
+    { name: 'NODE_ENV', value: 'production' }
+    { name: 'DATABASE_URL', secretRef: 'database-url' }
+    { name: 'DATABASE_SSL_MODE', value: 'verify-full' }
+    { name: 'DATABASE_SSL_CA_PATH', value: '/app/certs/supabase-prod-ca-2021.pem' }
+    { name: 'DB_POOL_MAX', value: '3' }
+    { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+    { name: 'AZURE_KEY_VAULT_URL', value: vault.properties.vaultUri }
+    { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${az.environment().suffixes.storage}' }
+    { name: 'AZURE_AUDIO_CONTAINER', value: audioContainerName }
+    { name: 'SESSION_COOKIE_SECURE', value: 'true' }
+    { name: 'EXTERNAL_SSO_ENABLED', value: string(effectiveExternalSsoEnabled) }
+    { name: 'EXTERNAL_SSO_PROVIDER_ID', value: externalSsoProviderId }
+    { name: 'EXTERNAL_SSO_ISSUER', value: externalSsoIssuer }
+    { name: 'EXTERNAL_SSO_AUDIENCE', value: externalSsoAudience }
+    { name: 'EXTERNAL_SSO_ALLOW_ADMIN', value: 'false' }
+    { name: 'XAPI_ENABLED', value: string(effectiveXapiEnabled) }
+    { name: 'XAPI_LRS_URL', value: xapiLrsUrl }
+    { name: 'XAPI_SOURCE_APP', value: 'speaking-lab' }
+    { name: 'XAPI_ACTOR_HOMEPAGE', value: 'https://saif.rsaf.mil' }
+  ],
+  !empty(externalSsoSharedSecret) ? [
+    { name: 'EXTERNAL_SSO_SHARED_SECRET', secretRef: 'external-sso-shared-secret' }
+  ] : [],
+  !empty(xapiUsername) && !empty(xapiPassword) ? [
+    { name: 'XAPI_USERNAME', secretRef: 'xapi-username' }
+    { name: 'XAPI_PASSWORD', secretRef: 'xapi-password' }
+  ] : []
+)
 
 resource app 'Microsoft.App/containerApps@2025-01-01' = {
   name: appName
@@ -122,33 +240,14 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
         transport: 'auto'
         allowInsecure: false
       }
-      secrets: [
-        {
-          name: 'database-url'
-          keyVaultUrl: databaseUrlSecret.properties.secretUri
-          identity: identity.id
-        }
-      ]
+      secrets: applicationSecrets
     }
     template: {
       containers: [
         {
           name: 'web'
           image: appImage
-          env: [
-            { name: 'NODE_ENV', value: 'production' }
-            { name: 'DATABASE_URL', secretRef: 'database-url' }
-            { name: 'DATABASE_SSL_MODE', value: 'verify-full' }
-            { name: 'DATABASE_SSL_CA_PATH', value: '/app/certs/supabase-prod-ca-2021.pem' }
-            { name: 'DB_POOL_MAX', value: '3' }
-            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
-            { name: 'AZURE_KEY_VAULT_URL', value: vault.properties.vaultUri }
-            { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${az.environment().suffixes.storage}' }
-            { name: 'AZURE_AUDIO_CONTAINER', value: audioContainerName }
-            { name: 'SESSION_COOKIE_SECURE', value: 'true' }
-            { name: 'XAPI_SOURCE_APP', value: 'speaking-lab' }
-            { name: 'XAPI_ACTOR_HOMEPAGE', value: 'https://saif.rsaf.mil' }
-          ]
+          env: applicationEnvironment
           probes: [
             {
               type: 'Liveness'
@@ -316,3 +415,5 @@ output backupJobName string = backupJob.name
 output runtimeIdentityClientId string = identity.properties.clientId
 output databaseProvider string = 'external-postgresql'
 output minimumReplicas int = 0
+output externalSsoIsEnabled bool = effectiveExternalSsoEnabled
+output xapiIsEnabled bool = effectiveXapiEnabled
