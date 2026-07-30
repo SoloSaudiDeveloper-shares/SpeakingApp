@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { getSessionFromToken } from '@/lib/actions/auth-actions';
 import { getCurrentCycle, getStudentAttempts, getWordMastery } from '@/lib/actions/practice-actions';
 import { getEffectiveStageConfig, getDefaultStageConfig } from '@/lib/actions/stage-config-actions';
-import { db, sqlite } from '@/lib/db';
+import { db, pool } from '@/lib/db';
 import { students } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 
@@ -86,36 +86,21 @@ export async function GET() {
         attempts: [],
         mastery: [],
         notAStudent: true,
-        stageConfig: getDefaultStageConfig(),
+        stageConfig: await getDefaultStageConfig(),
       });
     }
 
-    const cycleData = getCurrentCycle(user.studentId);
-    const stageConfig = getEffectiveStageConfig(user.studentId);
+    const cycleData = await getCurrentCycle(user.studentId);
+    const stageConfig = await getEffectiveStageConfig(user.studentId);
 
     if (!cycleData) {
       return Response.json({ cycle: null, attempts: [], mastery: [], stageConfig });
     }
 
-    const studentAttempts = getStudentAttempts(user.studentId, cycleData.cycle.id);
-    const mastery = getWordMastery(user.studentId, cycleData.cycle.id);
-    const student = db.select().from(students).where(eq(students.id, user.studentId)).get();
-    const klpRows = sqlite.prepare(`
-      SELECT
-        pt.vocabulary_item_id AS vocabularyItemId,
-        kc.id AS klpId,
-        kc.concept_id AS conceptId,
-        kc.book,
-        kc.lesson,
-        kc.domain,
-        kc.base_item AS baseItem,
-        kc.subtype,
-        kc.support_status AS supportStatus
-      FROM practice_tasks pt
-      INNER JOIN practice_task_klps ptk ON ptk.practice_task_id = pt.id
-      INNER JOIN klp_concepts kc ON kc.id = ptk.klp_concept_id
-      WHERE pt.book_id = ? AND pt.vocabulary_item_id IS NOT NULL
-    `).all(cycleData.cycle.bookId) as Array<{
+    const studentAttempts = await getStudentAttempts(user.studentId, cycleData.cycle.id);
+    const mastery = await getWordMastery(user.studentId, cycleData.cycle.id);
+    const student = ((await db.select().from(students).where(eq(students.id, user.studentId)).limit(1))[0]);
+    const klpRows = (await pool.query<{
       vocabularyItemId: number;
       klpId: number;
       conceptId: string;
@@ -125,7 +110,22 @@ export async function GET() {
       baseItem: string | null;
       subtype: string | null;
       supportStatus: string;
-    }>;
+    }>(`
+      SELECT
+        pt.vocabulary_item_id AS "vocabularyItemId",
+        kc.id AS "klpId",
+        kc.concept_id AS "conceptId",
+        kc.book,
+        kc.lesson,
+        kc.domain,
+        kc.base_item AS "baseItem",
+        kc.subtype,
+        kc.support_status AS "supportStatus"
+      FROM practice_tasks pt
+      INNER JOIN practice_task_klps ptk ON ptk.practice_task_id = pt.id
+      INNER JOIN klp_concepts kc ON kc.id = ptk.klp_concept_id
+      WHERE pt.book_id = $1 AND pt.vocabulary_item_id IS NOT NULL
+    `, [cycleData.cycle.bookId])).rows;
     const klpByVocab = new Map<number, typeof klpRows>();
     for (const row of klpRows) {
       const list = klpByVocab.get(row.vocabularyItemId) ?? [];

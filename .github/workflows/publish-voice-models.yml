@@ -1,0 +1,156 @@
+name: Publish signed voice models
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: speaking-lab-voice-models
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: azure/login@1384c340ab2dda50fed2bee3041d1d87018aa5e8 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and sign an immutable model manifest
+        id: manifest
+        env:
+          VOICE_MODEL_SIGNING_KEY_PEM: ${{ secrets.VOICE_MODEL_SIGNING_KEY_PEM }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VOICE_MODEL_SIGNING_KEY_PEM"
+          source_dir="${RUNNER_TEMP}/kokoro-model"
+          mkdir -p "$source_dir"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx \
+            --output "$source_dir/model.onnx"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin \
+            --output "$source_dir/voices.bin"
+          test "$(wc -c < "$source_dir/model.onnx")" -eq 92361271
+          test "$(wc -c < "$source_dir/voices.bin")" -eq 28214398
+          echo "6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb  $source_dir/model.onnx" \
+            | sha256sum --check --strict
+          echo "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d  $source_dir/voices.bin" \
+            | sha256sum --check --strict
+          signing_key="${RUNNER_TEMP}/voice-model-signing.pem"
+          printf '%s' "$VOICE_MODEL_SIGNING_KEY_PEM" > "$signing_key"
+          chmod 600 "$signing_key"
+          openssl ec -in "$signing_key" -check -noout
+          SOURCE_DIR="$source_dir" RELEASE_SHA="$GITHUB_SHA" node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const crypto = require("node:crypto");
+          const root = process.env.SOURCE_DIR;
+          const files = [];
+          const walk = (dir) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const absolute = path.join(dir, entry.name);
+              if (entry.isDirectory()) walk(absolute);
+              else {
+                const data = fs.readFileSync(absolute);
+                files.push({
+                  path: path.relative(root, absolute).split(path.sep).join("/"),
+                  bytes: data.length,
+                  sha256: crypto.createHash("sha256").update(data).digest("hex"),
+                });
+              }
+            }
+          };
+          walk(root);
+          files.sort((a, b) => a.path.localeCompare(b.path));
+          const probe = files.reduce((largest, item) => item.bytes > largest.bytes ? item : largest);
+          const prefix = `releases/${process.env.RELEASE_SHA}/`;
+          const manifest = {
+            schemaVersion: 1,
+            release: process.env.RELEASE_SHA,
+            modelId: "kokoro-82m-v1.0-onnx",
+            createdAt: new Date().toISOString(),
+            probePath: prefix + probe.path,
+            probeBytes: probe.bytes,
+            probeSha256: probe.sha256,
+            files: files.map((item) => ({ ...item, path: prefix + item.path })),
+          };
+          fs.writeFileSync("voice-model-manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+          NODE
+          openssl dgst -sha256 -sign "$signing_key" \
+            -out voice-model-manifest.sig voice-model-manifest.json
+          openssl pkey -in "$signing_key" -pubout -out "${RUNNER_TEMP}/voice-model-public.pem"
+          fingerprint="$(openssl pkey -pubin -in "${RUNNER_TEMP}/voice-model-public.pem" \
+            -outform DER | sha256sum | cut -d' ' -f1)"
+          echo "signing_key_fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Upload versioned files and atomically promote the signed manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n '${{ vars.AZURE_MODEL_STORAGE_ACCOUNT }}'
+          az storage blob upload-batch \
+            --auth-mode login \
+            --account-name '${{ vars.AZURE_MODEL_STORAGE_ACCOUNT }}' \
+            --destination voice-models \
+            --destination-path "releases/${GITHUB_SHA}" \
+            --source "${RUNNER_TEMP}/kokoro-model" \
+            --overwrite false
+          for name in manifest.json manifest.sig; do
+            source="voice-model-manifest.${name##*.}"
+            az storage blob upload \
+              --auth-mode login \
+              --account-name '${{ vars.AZURE_MODEL_STORAGE_ACCOUNT }}' \
+              --container-name voice-models \
+              --name "releases/${GITHUB_SHA}/$name" \
+              --file "$source" \
+              --overwrite false
+          done
+          az storage blob upload \
+            --auth-mode login \
+            --account-name '${{ vars.AZURE_MODEL_STORAGE_ACCOUNT }}' \
+            --container-name voice-models \
+            --name manifest.json \
+            --file voice-model-manifest.json \
+            --content-type application/json \
+            --overwrite true
+          az storage blob upload \
+            --auth-mode login \
+            --account-name '${{ vars.AZURE_MODEL_STORAGE_ACCOUNT }}' \
+            --container-name voice-models \
+            --name manifest.sig \
+            --file voice-model-manifest.sig \
+            --content-type application/octet-stream \
+            --overwrite true
+
+      - name: Verify the promoted manifest and probe object
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://${{ vars.AZURE_MODEL_STORAGE_ACCOUNT }}.blob.core.windows.net/voice-models/"
+          curl --fail --silent --show-error "${base}manifest.json" -o promoted-manifest.json
+          curl --fail --silent --show-error "${base}manifest.sig" -o promoted-manifest.sig
+          openssl dgst -sha256 -verify "${RUNNER_TEMP}/voice-model-public.pem" \
+            -signature promoted-manifest.sig promoted-manifest.json
+          probe_path="$(node -p 'require("./promoted-manifest.json").probePath')"
+          probe_sha="$(node -p 'require("./promoted-manifest.json").probeSha256')"
+          curl --fail --silent --show-error "${base}${probe_path}" -o promoted-probe.bin
+          echo "$probe_sha  promoted-probe.bin" | sha256sum --check --strict
+          {
+            echo "### Signed voice model promotion"
+            echo
+            echo "- Release: \`${GITHUB_SHA}\`"
+            echo "- Signing key fingerprint: \`${{ steps.manifest.outputs.signing_key_fingerprint }}\`"
+            echo "- Manifest and largest model object were downloaded and verified after promotion."
+          } >> "$GITHUB_STEP_SUMMARY"

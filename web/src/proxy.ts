@@ -1,16 +1,27 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { mutationRequestViolation } from '@/lib/security/request-protection';
 
 export function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith('/api/')) {
+    const violation = mutationRequestViolation(request);
+    if (violation) {
+      return NextResponse.json(
+        { error: violation },
+        { status: 403, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+    return NextResponse.next();
+  }
+
   if (
-    request.nextUrl.pathname.startsWith('/api/dev') &&
-    process.env.NODE_ENV === 'production' &&
-    process.env.ENABLE_DEV_DIAGNOSTICS !== 'true'
+    request.cookies.get('must-change-password')?.value === '1' &&
+    request.nextUrl.pathname !== '/change-password'
   ) {
-    return NextResponse.json({ error: 'Developer diagnostics are disabled.' }, { status: 404 });
+    return NextResponse.redirect(new URL('/change-password', request.url));
   }
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ['/api/dev/:path*'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 };

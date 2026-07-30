@@ -1,12 +1,12 @@
 "use client"
 
 import { useState, useRef, useEffect, useCallback } from "react"
-import { useSearchParams } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Send, Mic, MicOff, Loader2, MessageCircle, Sparkles, AlertTriangle, CheckCircle2, Circle, Trophy, X, Volume2, Coffee, Utensils, ShoppingBag, Map, Stethoscope, Briefcase, Plane, Users, Drama } from "lucide-react"
 import { getDefaultEngine, getSpeechEngine } from "@/lib/speech/speech-factory"
 import type { SpeechEngine, STTEngineId } from "@/lib/speech/types"
 import { recordClientSpeechReliabilityEvent } from "@/lib/speech/reliability-client"
-import { speak, cancelSpeak, prepareActiveTts } from "@/lib/speech/tts"
+import { speak, cancelSpeak } from "@/lib/speech/tts"
 import { useI18n } from "@/components/layout/i18n-provider"
 import { SCENARIOS, type Scenario } from "@/lib/ai/scenarios"
 import type { ScenarioProgressionMode } from "@/lib/ai/scenarios"
@@ -82,14 +82,16 @@ export default function AIConversationPage() {
   // The AI tutor is currently speaking (TTS playing) — block recording so the
   // mic doesn't capture the AI's own voice.
   const [aiSpeaking, setAiSpeaking] = useState(false)
-  // The voice model has finished loading — until then, "Speak" is disabled.
-  const [ttsReady, setTtsReady] = useState(false)
+  // TTS provider readiness no longer acquires or blocks on a browser-local model.
+  const ttsReady = true
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const engineRef = useRef<SpeechEngine | null>(null)
   const interimUnsubRef = useRef<(() => void) | null>(null)
 
   // Scenario role-play
+  const router = useRouter()
   const searchParams = useSearchParams()
+  const assignmentId = searchParams.get("assignmentId")
   const [tab, setTab] = useState<"chat" | "scenarios">(searchParams.get("mode") === "scenarios" ? "scenarios" : "chat")
   const [activeScenario, setActiveScenario] = useState<Scenario | null>(null)
   const [scenarioList, setScenarioList] = useState<Scenario[]>(SCENARIOS)
@@ -97,6 +99,8 @@ export default function AIConversationPage() {
   const [grading, setGrading] = useState(false)
   const [liveGrading, setLiveGrading] = useState(false)
   const [liveSaved, setLiveSaved] = useState(false)
+  const [scenarioEnded, setScenarioEnded] = useState(false)
+  const [scenarioSessionId, setScenarioSessionId] = useState("")
   const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null)
   const [liveScenarioResult, setLiveScenarioResult] = useState<ScenarioResult | null>(null)
 
@@ -125,13 +129,11 @@ export default function AIConversationPage() {
       })
       .catch(() => {})
 
-    // Warm up the STT engine (offline models cold-load) and the active neural
-    // voice (Kokoro). "Speak" stays disabled with a "loading voice…" message
-    // until the voice model is ready, so the user never talks to a dead mic.
+    // Warm up only the STT engine. Browser-local TTS acquisition is an explicit
+    // user action in Voice settings.
     const saved = (typeof window !== "undefined" ? localStorage.getItem("stt-engine") : null) as STTEngineId | null
     engineRef.current = saved ? getSpeechEngine(saved) : getDefaultEngine()
     engineRef.current.prepare?.().catch(() => {})
-    prepareActiveTts().finally(() => setTtsReady(true))
   }, [])
 
   useEffect(() => {
@@ -156,7 +158,7 @@ export default function AIConversationPage() {
   const scoreScenarioMessages = useCallback(async (
     scenario: Scenario,
     messagesForScore: Message[],
-    options: { persistMode: "always" | "auto" | "never"; showModal?: boolean; live?: boolean },
+    options: { persistMode: "always" | "auto" | "never"; showModal?: boolean; live?: boolean; completionReason?: "manual" | "goals-met" | "max-turns" },
   ) => {
     if (options.live) setLiveGrading(true)
     else setGrading(true)
@@ -167,6 +169,8 @@ export default function AIConversationPage() {
           scenarioId: scenario.id,
           messages: messagesForScore.map(m => ({ role: m.role, content: m.content })),
           persistMode: options.persistMode,
+          sessionId: scenarioSessionId,
+          completionReason: options.completionReason,
         }),
       })
       const data = await res.json()
@@ -195,10 +199,10 @@ export default function AIConversationPage() {
       if (options.live) setLiveGrading(false)
       else setGrading(false)
     }
-  }, [])
+  }, [scenarioSessionId])
 
   const sendMessage = useCallback(async (content: string) => {
-    if (!content.trim()) return
+    if (!content.trim() || scenarioEnded) return
 
     const userMsg: Message = { role: "user", content, timestamp: Date.now() }
     const newMessages = [...messages, userMsg]
@@ -206,11 +210,24 @@ export default function AIConversationPage() {
     setInput("")
     setThinking(true)
 
-    if (activeScenario && scenarioScoringMode === "live") {
-      void scoreScenarioMessages(activeScenario, newMessages, {
-        persistMode: liveSaved ? "never" : "auto",
-        live: true,
-      })
+    if (activeScenario) {
+      const result = await scoreScenarioMessages(activeScenario, newMessages, { persistMode: "auto", live: true })
+      const learnerTurns = newMessages.filter((message) => message.role === "user" && message.content.trim()).length
+      const allGoalsMet = Boolean(result?.criteriaMet.length) && result!.criteriaMet.every(Boolean)
+      const maxTurns = Math.max(activeScenario.minTurns, activeScenario.maxTurns ?? 8)
+      const completionReason = learnerTurns >= maxTurns ? "max-turns" : allGoalsMet && learnerTurns >= activeScenario.minTurns ? "goals-met" : null
+      if (result && completionReason) {
+        const closing = completionReason === "goals-met"
+          ? "You achieved the goals for this scenario. Great work — let’s review your feedback."
+          : "That completes the final turn. Let’s review what you achieved and what to practise next."
+        setScenarioEnded(true)
+        setLiveSaved(Boolean(result.persisted))
+        setScenarioResult(result)
+        setMessages([...newMessages, { role: "assistant", content: closing, timestamp: Date.now() }])
+        void speakAi(closing)
+        setThinking(false)
+        return
+      }
     }
 
     try {
@@ -253,33 +270,56 @@ export default function AIConversationPage() {
     } finally {
       setThinking(false)
     }
-  }, [messages, activeScenario, scenarioScoringMode, liveSaved, scoreScenarioMessages, speakAi])
+  }, [messages, activeScenario, scenarioEnded, scoreScenarioMessages, speakAi])
 
   const startScenario = (scenario: Scenario) => {
     setActiveScenario(scenario)
     setScenarioResult(null)
     setLiveScenarioResult(null)
     setLiveSaved(false)
+    setScenarioEnded(false)
+    setScenarioSessionId(globalThis.crypto?.randomUUID?.() ?? `${scenario.id}-${Date.now()}`)
     setMessages([{ role: "assistant", content: scenario.firstMessage, timestamp: Date.now() }])
     speakAi(scenario.firstMessage)
   }
 
   const finishScenario = async () => {
     if (!activeScenario) return
-    if (liveSaved && liveScenarioResult) {
-      setScenarioResult(liveScenarioResult)
+    if (scenarioEnded && (scenarioResult || liveScenarioResult)) {
+      setScenarioResult(scenarioResult ?? liveScenarioResult)
       return
     }
-    await scoreScenarioMessages(activeScenario, messages, { persistMode: "always", showModal: true })
+    const result = await scoreScenarioMessages(activeScenario, messages, { persistMode: "always", showModal: true, completionReason: "manual" })
+    if (result) {
+      const closing = "You’ve finished this scenario. Review your goals and one next improvement below."
+      setScenarioEnded(true)
+      setLiveSaved(Boolean(result.persisted))
+      setMessages((current) => [...current, { role: "assistant", content: closing, timestamp: Date.now() }])
+    }
   }
 
   const exitScenario = () => {
+    if (assignmentId) {
+      router.push("/practice/hub")
+      return
+    }
     setActiveScenario(null)
     setScenarioResult(null)
     setLiveScenarioResult(null)
     setLiveSaved(false)
+    setScenarioEnded(false)
+    setScenarioSessionId("")
     setMessages([])
   }
+
+  useEffect(() => {
+    const requested = searchParams.get("scenarioId")
+    if (!requested || activeScenario || messages.length > 0) return
+    const scenario = scenarioList.find((item) => item.id === requested)
+    if (scenario) startScenario(scenario)
+    // startScenario intentionally uses current scenario selection state only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarioList, searchParams, activeScenario, messages.length])
 
   const handleVoiceInput = async () => {
     setMicError(null)
@@ -390,12 +430,8 @@ export default function AIConversationPage() {
 
   const scenarioProgress = liveScenarioResult ?? scenarioResult
   const scenarioUserTurnCount = messages.filter(m => m.role === "user" && m.content.trim()).length
-  const scenarioCanFinish = !activeScenario || liveSaved || scenarioUserTurnCount >= activeScenario.minTurns
-  const scenarioButtonLabel = scenarioScoringMode === "live"
-    ? liveSaved
-      ? "View Score"
-      : "Finish & Save"
-    : "Finish & Score"
+  const scenarioCanFinish = !activeScenario || scenarioEnded || scenarioUserTurnCount >= activeScenario.minTurns
+  const scenarioButtonLabel = scenarioEnded ? "View feedback" : "Finish & Save"
   const scenarioGoalsMet = scenarioProgress?.criteriaMet.filter(Boolean).length ?? 0
   const scenarioGoalTotal = activeScenario?.successCriteria.length ?? 0
   const scenarioProgressPercent = scenarioGoalTotal ? Math.round((scenarioGoalsMet / scenarioGoalTotal) * 100) : 0
@@ -557,7 +593,7 @@ export default function AIConversationPage() {
             <div className="mt-3">
               <div className="mb-1 flex items-center justify-between text-[0.7rem] text-muted-foreground">
                 <span>Goal progress</span>
-                <span>{scenarioGoalsMet}/{scenarioGoalTotal} goals · {scenarioProgressPercent}%</span>
+                <span>{scenarioGoalsMet}/{scenarioGoalTotal} goals · {scenarioProgressPercent}% · turn {scenarioUserTurnCount}/{activeScenario.maxTurns ?? 8}</span>
               </div>
               <div
                 className="grid h-2 overflow-hidden rounded-full bg-background/70 ring-1 ring-border"
@@ -589,6 +625,9 @@ export default function AIConversationPage() {
                 )}
               </div>
             )}
+            <p className="mt-2 text-[0.7rem] text-muted-foreground">
+              The tutor wraps up when every goal is met after {activeScenario.minTurns} turns, or after {activeScenario.maxTurns ?? 8} turns.
+            </p>
             {scenarioProgress?.criteriaDetails && (
               <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
                 {scenarioProgress.criteriaDetails.map((detail, i) => (
@@ -676,7 +715,7 @@ export default function AIConversationPage() {
               {scenarioModelAnswer && (
                 <button onClick={() => speakAi(scenarioModelAnswer)} className="flex-1 rounded-md border border-primary/40 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/10">Practice model</button>
               )}
-              <button onClick={() => setScenarioResult(null)} className="flex-1 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Keep chatting</button>
+              <button onClick={exitScenario} className="flex-1 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Done</button>
             </div>
           </div>
         </div>
@@ -752,7 +791,7 @@ export default function AIConversationPage() {
         {(inputMode === "both" || inputMode === "voice") && (
           <button
             onClick={handleVoiceInput}
-            disabled={thinking || (!recording && (aiSpeaking || !ttsReady))}
+            disabled={thinking || scenarioEnded || (!recording && (aiSpeaking || !ttsReady))}
             className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full transition ${
               recording
                 ? "bg-red-500 text-white animate-pulse"
@@ -783,7 +822,7 @@ export default function AIConversationPage() {
                 ? "Type your message..."
                 : t("ai_conv.placeholder")
             }
-            disabled={thinking || recording}
+            disabled={thinking || recording || scenarioEnded}
             className="flex-1 rounded-full border border-border bg-background px-4 py-2 text-sm focus:border-primary focus:outline-none disabled:opacity-50"
           />
         )}
@@ -799,7 +838,7 @@ export default function AIConversationPage() {
         {(inputMode === "both" || inputMode === "text") && (
           <button
             onClick={() => sendMessage(input)}
-            disabled={!input.trim() || thinking}
+            disabled={!input.trim() || thinking || scenarioEnded}
             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
           >
             <Send size={18} />

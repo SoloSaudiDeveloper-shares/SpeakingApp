@@ -35,10 +35,27 @@ export class BrowserTtsEngine implements TtsEngine {
   }
 
   speak(text: string, opts?: SpeakOptions): Promise<void> {
-    return new Promise((resolve) => {
-      if (!this.isAvailable()) { resolve(); return }
+    return new Promise((resolve, reject) => {
+      if (!this.isAvailable()) {
+        reject(new Error("Browser speech synthesis is unavailable."))
+        return
+      }
       window.speechSynthesis.cancel()
       const u = new SpeechSynthesisUtterance(text)
+      let settled = false
+      const cleanup = () => opts?.signal?.removeEventListener("abort", onAbort)
+      const finish = (callback: () => void) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        callback()
+      }
+      const onAbort = () => {
+        window.speechSynthesis.cancel()
+        finish(() => reject(
+          opts?.signal?.reason ?? new DOMException("Speech cancelled.", "AbortError"),
+        ))
+      }
       u.lang = "en-US"
       u.rate = Math.max(0.1, Math.min(2, opts?.rate ?? 1))
       u.volume = Math.max(0, Math.min(1, opts?.volume ?? 1))
@@ -46,8 +63,15 @@ export class BrowserTtsEngine implements TtsEngine {
         const voice = window.speechSynthesis.getVoices().find((v) => v.name === opts.voice || v.voiceURI === opts.voice)
         if (voice) u.voice = voice
       }
-      u.onend = () => resolve()
-      u.onerror = () => resolve()
+      u.onend = () => finish(resolve)
+      u.onerror = (event) => finish(() => reject(
+        new Error(`Browser speech synthesis failed (${event.error || "unknown error"}).`),
+      ))
+      if (opts?.signal?.aborted) {
+        onAbort()
+        return
+      }
+      opts?.signal?.addEventListener("abort", onAbort, { once: true })
       window.speechSynthesis.speak(u)
     })
   }

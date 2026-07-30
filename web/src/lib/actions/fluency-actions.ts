@@ -20,7 +20,7 @@ export interface FluencyDrillRound {
   weakWords?: string[];
 }
 
-export function recordFluencyDrill(data: {
+export async function recordFluencyDrill(data: {
   studentId: number;
   cycleId?: number | null;
   drillType: 'monologue' | 'shadowing';
@@ -28,7 +28,7 @@ export function recordFluencyDrill(data: {
   rounds: FluencyDrillRound[];
   improvementScore: number;
 }) {
-  return db
+  return ((await db
     .insert(fluencyDrillSessions)
     .values({
       studentId: data.studentId,
@@ -39,16 +39,14 @@ export function recordFluencyDrill(data: {
       improvementScore: data.improvementScore,
       createdAt: new Date().toISOString(),
     })
-    .returning()
-    .get();
+    .returning())[0]);
 }
 
-export function getFluencyDrillHistory(studentId: number, limit = 50) {
-  return db
+export async function getFluencyDrillHistory(studentId: number, limit = 50) {
+  return (await db
     .select()
     .from(fluencyDrillSessions)
     .where(eq(fluencyDrillSessions.studentId, studentId))
     .orderBy(desc(fluencyDrillSessions.createdAt))
-    .limit(limit)
-    .all();
+    .limit(limit));
 }

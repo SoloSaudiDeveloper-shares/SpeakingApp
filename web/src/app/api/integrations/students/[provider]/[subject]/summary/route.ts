@@ -10,7 +10,7 @@ export async function GET(
 
   try {
     const { provider, subject } = await params;
-    return Response.json(getExternalStudentSummary(decodeURIComponent(provider), decodeURIComponent(subject)));
+    return Response.json(await getExternalStudentSummary(decodeURIComponent(provider), decodeURIComponent(subject)));
   } catch (error) {
     if (error instanceof IntegrationError) {
       return Response.json({ error: error.message }, { status: error.status });

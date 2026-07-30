@@ -7,12 +7,12 @@
 // Why fp32 and not a smaller quantized build: the q8/uint8 Whisper exports use
 // MatMulNBits ops that onnxruntime-web 1.26 (what Transformers.js v4 ships)
 // cannot load ("Missing required scale … MatMulNBits"). fp32 loads reliably and
-// is actually faster on the WASM backend that Electron requires (no per-op
-// dequantization). Tiny keeps inference responsive in single-threaded WASM.
+// is faster on the browser WASM backend used by the hosted application (no
+// per-op dequantization). Tiny keeps inference responsive in single-threaded WASM.
 //
 // Transformers.js loads from `${env.localModelPath}/${modelId}/...`, and
-// prepare-electron-build.mjs already mirrors public/ into the standalone
-// bundle, so anything we drop here ships with the app automatically.
+// The Docker runner copies public/ beside the standalone server bundle, so
+// anything we drop here ships with the app automatically.
 
 import fs from "node:fs"
 import path from "node:path"

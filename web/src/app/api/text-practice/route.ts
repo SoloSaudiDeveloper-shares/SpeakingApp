@@ -12,7 +12,7 @@ export async function GET() {
     if (!user) return Response.json({ error: 'Session expired.' }, { status: 401 });
     if (!user.studentId) return Response.json({ error: 'Not a student.' }, { status: 403 });
 
-    const texts = getStudentTexts(user.studentId);
+    const texts = await getStudentTexts(user.studentId);
     return Response.json({ texts });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Title and text are required.' }, { status: 400 });
     }
 
-    const text = saveText(user.studentId, title, originalText, summary);
+    const text = await saveText(user.studentId, title, originalText, summary);
     return Response.json({ text });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });

@@ -11,7 +11,7 @@ export async function GET() {
     if (!user || (user.role !== 'Admin' && user.role !== 'Teacher'))
       return Response.json({ error: 'Not authorized.' }, { status: 403 });
 
-    return Response.json({ books: getBooks() });
+    return Response.json({ books: await getBooks() });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });
   }
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Not authorized.' }, { status: 403 });
 
     const body = await request.json();
-    const book = importBook(body);
+    const book = await importBook(body);
     return Response.json({ book });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });

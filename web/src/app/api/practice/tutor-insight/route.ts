@@ -2,6 +2,10 @@ import { cookies } from 'next/headers';
 import { getSessionFromToken } from '@/lib/actions/auth-actions';
 import { getStudentTutorInsight } from '@/lib/actions/report-actions';
 import { callChat, getActiveProvider } from '@/lib/ai/providers';
+import {
+  consumeCloudAiBudgetIfNeeded,
+  resourceBudgetResponse,
+} from '@/lib/security/resource-budget-server';
 
 function parseTutorJson(content: string) {
   try {
@@ -35,10 +39,11 @@ export async function GET() {
     const user = await getSessionFromToken(token);
     if (!user?.studentId) return Response.json({ error: 'Student only.' }, { status: 403 });
 
-    const summary = getStudentTutorInsight(user.studentId);
+    const summary = await getStudentTutorInsight(user.studentId);
     if (!summary) return Response.json({ error: 'Student was not found.' }, { status: 404 });
 
     try {
+      await consumeCloudAiBudgetIfNeeded(user.id);
       const result = await callChat([
         {
           role: 'system',
@@ -74,7 +79,9 @@ export async function GET() {
         raw: result.content.slice(0, 500),
       });
     } catch (error) {
-      const provider = getActiveProvider();
+      const budgetResponse = resourceBudgetResponse(error);
+      if (budgetResponse) return budgetResponse;
+      const provider = await getActiveProvider();
       return Response.json({
         aiAvailable: false,
         provider: provider.provider,

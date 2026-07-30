@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: speaking_lab
+      POSTGRES_USER: speaking
+      POSTGRES_PASSWORD: local-development-only
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U speaking -d speaking_lab"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.36.0
+    command: azurite-blob --blobHost 0.0.0.0 --location /data --skipApiVersionCheck
+    environment:
+      AZURITE_ACCOUNTS: "speaking:c3BlYWtpbmctbGFiLWxvY2FsLWF6dXJpdGUta2V5LTMy"
+    ports:
+      - "10000:10000"
+    volumes:
+      - azurite-data:/data
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: jobs
+    command: ["node", "/app/jobs/migrate.mjs"]
+    environment:
+      DATABASE_URL: postgresql://speaking:local-development-only@postgres:5432/speaking_lab
+      DATABASE_SSL_MODE: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://speaking:local-development-only@postgres:5432/speaking_lab
+      DATABASE_SSL_MODE: disable
+      SETTINGS_ENCRYPTION_KEY: local-compose-encryption-key-change-before-use
+      ALLOW_LOCAL_ENCRYPTED_SECRET_STORE: "true"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=speaking;AccountKey=c3BlYWtpbmctbGFiLWxvY2FsLWF6dXJpdGUta2V5LTMy;BlobEndpoint=http://azurite:10000/speaking;"
+      AZURE_AUDIO_CONTAINER: speaking-audio
+      SESSION_COOKIE_SECURE: "false"
+    ports:
+      - "3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      azurite:
+        condition: service_started
+
+volumes:
+  postgres-data:
+  azurite-data:

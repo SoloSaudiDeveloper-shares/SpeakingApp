@@ -34,8 +34,8 @@ export async function POST(request: Request) {
       return Response.json({ error: 'No users provided.' }, { status: 400 });
     }
 
-    const results = users.map((user) => {
-      const local = upsertExternalUser({
+    const results = users.map(async (user) => {
+      const local = await upsertExternalUser({
         provider: user.provider ?? config.providerId,
         subject: user.subject,
         role: user.role,

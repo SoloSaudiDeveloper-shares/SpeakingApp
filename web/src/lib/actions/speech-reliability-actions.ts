@@ -1,9 +1,9 @@
-import { desc, eq } from 'drizzle-orm';
-import { db, sqlite } from '@/lib/db';
+import { desc, eq, sql } from 'drizzle-orm';
+import { db } from '@/lib/db';
 import { speechReliabilityEvents, students } from '@/lib/db/schema';
 import type { ReportFilters } from '@/lib/actions/report-actions';
 
-export type SpeechReliabilityEventType = 'stt' | 'pronunciation' | 'recording';
+export type SpeechReliabilityEventType = 'stt' | 'pronunciation' | 'recording' | 'tts';
 
 export interface SpeechReliabilityEventInput {
   studentId?: number | null;
@@ -78,6 +78,13 @@ export interface SpeechReliabilityReport {
 type ReliabilityRow = typeof speechReliabilityEvents.$inferSelect;
 
 const BLOCKED_METADATA_KEYS = /transcript|audio|blob|file|key|token|secret|providerBody|raw/i;
+const SAFE_TTS_METADATA_KEYS = new Set([
+  'characters',
+  'audio_bytes',
+  'ttfb_ms',
+  'total_ms',
+  'stream_outcome',
+]);
 
 function sanitizeString(value: unknown, max = 120) {
   if (typeof value !== 'string') return null;
@@ -93,7 +100,7 @@ function sanitizeNumber(value: unknown) {
 function sanitizeMetadata(metadata: Record<string, unknown> | null | undefined) {
   const safe: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(metadata ?? {})) {
-    if (BLOCKED_METADATA_KEYS.test(key)) continue;
+    if (BLOCKED_METADATA_KEYS.test(key) && !SAFE_TTS_METADATA_KEYS.has(key)) continue;
     if (typeof value === 'string') safe[key] = value.slice(0, 160);
     else if (typeof value === 'number' || typeof value === 'boolean' || value === null) safe[key] = value;
   }
@@ -146,13 +153,13 @@ function eventMatches(row: ReliabilityRow, eventType: SpeechReliabilityEventType
   return row.eventType === eventType;
 }
 
-export function recordSpeechReliabilityEvent(input: SpeechReliabilityEventInput) {
+export async function recordSpeechReliabilityEvent(input: SpeechReliabilityEventInput) {
   const student = input.studentId
-    ? db.select({ className: students.class }).from(students).where(eq(students.id, input.studentId)).get()
+    ? ((await db.select({ className: students.class }).from(students).where(eq(students.id, input.studentId)).limit(1))[0])
     : null;
   const latencyMs = sanitizeNumber(input.latencyMs) ?? 0;
 
-  return db.insert(speechReliabilityEvents).values({
+  return ((await db.insert(speechReliabilityEvents).values({
     studentId: input.studentId ?? null,
     userId: input.userId ?? null,
     className: sanitizeString(input.className) ?? student?.className ?? null,
@@ -170,11 +177,11 @@ export function recordSpeechReliabilityEvent(input: SpeechReliabilityEventInput)
     fallbackUsed: !!input.fallbackUsed,
     metadataJson: JSON.stringify(sanitizeMetadata(input.metadata)),
     createdAt: new Date().toISOString(),
-  }).returning().get();
+  }).returning())[0]);
 }
 
-export function getSpeechReliabilityReport(filters: ReportFilters = {}): SpeechReliabilityReport {
-  const selectedStudents = db.select().from(students).where(eq(students.isActive, true)).all().filter((student) => {
+export async function getSpeechReliabilityReport(filters: ReportFilters = {}): Promise<SpeechReliabilityReport> {
+  const selectedStudents = (await db.select().from(students).where(eq(students.isActive, true))).filter((student) => {
     if (filters.studentId && student.id !== filters.studentId) return false;
     if (filters.className && (student.class ?? 'Unassigned') !== filters.className) return false;
     if (filters.cefr && student.cefrBand !== filters.cefr) return false;
@@ -182,11 +189,10 @@ export function getSpeechReliabilityReport(filters: ReportFilters = {}): SpeechR
   });
   const studentById = new Map(selectedStudents.map((student) => [student.id, student]));
   const selectedStudentIds = new Set(selectedStudents.map((student) => student.id));
-  const rows = db
+  const rows = (await db
     .select()
     .from(speechReliabilityEvents)
-    .orderBy(desc(speechReliabilityEvents.createdAt))
-    .all()
+    .orderBy(desc(speechReliabilityEvents.createdAt)))
     .filter((row) => rowMatchesFilters(row, filters, selectedStudentIds));
 
   const sttEvents = rows.filter((row) => eventMatches(row, 'stt'));
@@ -266,6 +272,7 @@ export function getSpeechReliabilityReport(filters: ReportFilters = {}): SpeechR
   };
 }
 
-export function countSpeechReliabilityEventsForQualityCheck() {
-  return (sqlite.prepare('SELECT COUNT(*) AS count FROM speech_reliability_events').get() as { count: number }).count;
+export async function countSpeechReliabilityEventsForQualityCheck() {
+  const row = (await db.select({ count: sql<number>`count(*)::int` }).from(speechReliabilityEvents))[0];
+  return Number(row?.count ?? 0);
 }

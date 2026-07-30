@@ -1,7 +1,8 @@
 // Tests write operations (POST/PATCH/DELETE) end-to-end and cleans up after.
 //   node scripts/mutation-check.mjs
+import { randomBytes } from "node:crypto"
 
-const BASE = "http://localhost:3000"
+const BASE = (process.env.TEST_BASE_URL || "http://127.0.0.1:3000").replace(/\/$/, "")
 
 async function login(u, p) {
   const res = await fetch(`${BASE}/api/auth/login`, {
@@ -30,14 +31,21 @@ function check(name, ok, detail = "") {
 }
 
 async function main() {
-  const admin = await login("admin", "admin")
-  const student = await login("1", "1")
+  const adminPassword = process.env.MUTATION_ADMIN_PASSWORD || process.env.DEMO_ADMIN_PASSWORD
+  const studentPassword = process.env.MUTATION_STUDENT_PASSWORD || process.env.DEMO_STUDENT_PASSWORD
+  if (!adminPassword || !studentPassword) {
+    console.error("MUTATION_ADMIN_PASSWORD and MUTATION_STUDENT_PASSWORD are required.")
+    process.exit(1)
+  }
+  const admin = await login(process.env.MUTATION_ADMIN_USERNAME || "demo-admin", adminPassword)
+  const student = await login(process.env.MUTATION_STUDENT_USERNAME || "demo-learner", studentPassword)
   if (!admin || !student) { console.error("Login failed"); process.exit(1) }
 
   console.log("\n=== STUDENT CRUD ===")
   // Create
   const create = await api("/api/students", admin, "POST", {
     uniqueNumber: "TEST-QA-999", fullName: "QA Test Student", class: "QA Class", cefrBand: "A1",
+    password: `${randomBytes(18).toString("base64url")}aA1!`,
   })
   const newId = create.data?.student?.id
   check("Create student", create.status === 200 && !!newId, `id=${newId}`)

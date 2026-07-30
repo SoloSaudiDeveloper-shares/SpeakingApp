@@ -9,7 +9,7 @@ export async function GET() {
   const user = await getSessionFromToken(token);
   if (!user || user.role !== 'Admin') return Response.json({ ok: false, error: 'forbidden' }, { status: 403 });
 
-  const { apiKey, region } = getAzureSpeechTranscriptionConfig();
+  const { apiKey, region } = await getAzureSpeechTranscriptionConfig();
   if (!apiKey) {
     return Response.json({ ok: false, configured: false, error: 'No Azure Speech key configured.' }, { status: 503 });
   }

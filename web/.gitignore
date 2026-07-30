@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
 
 # next.js
 /.next/
@@ -32,6 +34,17 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.dump
+*.backup
+*.pfx
+*.p12
+*.key
+/migration-reports/
+/data/backups/
 
 # vercel
 .vercel
@@ -42,5 +55,5 @@ next-env.d.ts
 
 # bundled offline STT assets are large and should not go to GitHub.
 # Kokoro TTS under /public/models/onnx-community and the shared /public/ort
-# runtime stay tracked so the Railway demo can speak without extra downloads.
+# runtime stay tracked so the web deployment can speak without extra downloads.
 /public/models/Xenova/

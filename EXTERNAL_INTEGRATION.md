@@ -2,6 +2,13 @@
 
 This app can run standalone with its built-in login, or a custom portal can launch users into it with a short-lived signed JWT.
 
+For the joint SAIF programmer handover, contract traceability, sandbox verification,
+and Azure cutover sequence, use
+[`integration/SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md`](integration/SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md).
+The SAIF-side coding checklist and reference implementation are in
+[`integration/SAIF_PROGRAMMER_IMPLEMENTATION_GUIDE.md`](integration/SAIF_PROGRAMMER_IMPLEMENTATION_GUIDE.md).
+The present document is the generic application interface reference.
+
 ## SSO Launch
 
 Portal link:
@@ -27,9 +34,18 @@ JWT requirements:
 - Algorithm: `HS256`
 - Required claims: `iss`, `aud`, `sub`, `role`, `displayName`, `iat`, `exp`, `jti`
 - Allowed roles: `Student`, `Teacher`; `Admin` only when `EXTERNAL_SSO_ALLOW_ADMIN=true`
+- `iat` and `exp` are integer Unix seconds, `exp` is later than `iat`, and the
+  declared lifetime is no more than 120 seconds
 - Max age: 2 minutes from `iat`
+- Shared secret: at least 32 characters/bytes as supplied by deployment
 - `jti` can only be used once
 - Optional claims: `email`, `studentNumber`, `className`, `classId`, `redirectTo`
+
+For SAIF launches, `sub` is the only account-linking key. The app first resolves an
+existing external identity, then a local student number/username equal to `sub`, and
+finally creates one code-keyed account if no match exists. It never links SAIF users
+by display name or email. Send the pseudonymous SAIF learner code in `sub`; do not put
+real names or email addresses in SAIF cohort xAPI statements.
 
 Example payload:
 
@@ -78,3 +94,52 @@ Roster upsert body can be one user or `{ "users": [...] }`:
 ```
 
 Student summary returns local IDs, CEFR, diagnostic profile, active cycle, weak-word count, recent attempts, and progress stats. Raw audio is not exposed.
+
+## SAIF xAPI Outbox
+
+The Speaking Tutor keeps its own database. SAIF integration is limited to the signed
+launch handshake and xAPI statements sent to the SAIF LRS. Configure:
+
+```text
+XAPI_ENABLED=true
+XAPI_LRS_URL=https://YOUR_LRS/xapi/statements
+XAPI_USERNAME=<basic-auth-user>
+XAPI_PASSWORD=<basic-auth-password>
+XAPI_SOURCE_APP=speaking-lab
+XAPI_ACTOR_HOMEPAGE=https://saif.rsaf.mil
+```
+
+`XAPI_LRS_URL` is the LRS statements endpoint. Assessed, mapped KLP results are queued
+transactionally and delivered asynchronously in batches of at most 100 with xAPI
+version `1.0.3`. Learner requests do not wait for the LRS. Failed deliveries use
+exponential retry and remain visible to admins.
+
+The 2026-07-20 SAIF re-issue moved every SAIF-owned xAPI identifier to
+`https://saif.training`. This applies to KLP activity IRIs, activity types,
+SAIF-defined verbs, and extension keys. `XAPI_ACTOR_HOMEPAGE` is a separate,
+configurable Q1 identity choice and is not rewritten as an xAPI namespace.
+
+The SAIF actor is deliberately pseudonymous and is identical for direct-login and
+SAIF-launched activity after account linking:
+
+```json
+{
+  "objectType": "Agent",
+  "account": {
+    "homePage": "https://saif.rsaf.mil",
+    "name": "<signed SAIF sub>"
+  }
+}
+```
+
+Admin-only operational endpoints:
+
+```text
+GET  /api/admin/integrations/xapi/status
+POST /api/admin/integrations/xapi/retry
+GET  /api/admin/integrations/xapi/actor-map
+```
+
+The initial implementation emits only Profile v1.2 core fields. Proposed rich speech
+signals are recorded in `integration/SPEAKING_RICH_SIGNAL_Q3_PROPOSAL.md` and remain local
+until SAIF publishes extension IRIs.

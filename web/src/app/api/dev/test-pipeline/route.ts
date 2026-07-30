@@ -234,8 +234,8 @@ export async function GET() {
   expect('content: <4 words deferred to sufficiency', scoreContentQuality('yo yo') === 1, 'expected 1');
 
   // ── 6) Both engines configured (the default: Groq STT + Azure pronunciation) ─
-  const sttCfg = getTranscriptionConfig();
-  const pronCfg = getPronunciationConfig();
+  const sttCfg = await getTranscriptionConfig();
+  const pronCfg = await getPronunciationConfig();
   expect('engines: Groq speech-to-text key set', !!sttCfg.apiKey, sttCfg.apiKey ? `model=${sttCfg.model}` : 'no Groq key');
   expect('engines: Azure pronunciation key set', !!pronCfg.apiKey, pronCfg.apiKey ? `region=${pronCfg.region}` : 'no Azure key');
 

@@ -25,7 +25,7 @@ export async function GET(request: Request) {
     const cutoff = new Date(Date.now() - windowMs).toISOString();
 
     // Get recent attempts joined with student, practiceTask, word
-    const recent = db
+    const recent = (await db
       .select({
         attemptId: attempts.id,
         studentId: attempts.studentId,
@@ -43,8 +43,7 @@ export async function GET(request: Request) {
       .leftJoin(practiceTasks, eq(practiceTasks.id, attempts.practiceTaskId))
       .leftJoin(vocabularyItems, eq(vocabularyItems.id, practiceTasks.vocabularyItemId))
       .where(gte(attempts.timestamp, cutoff))
-      .orderBy(desc(attempts.timestamp))
-      .all();
+      .orderBy(desc(attempts.timestamp)));
 
     // Group by student — keep only their most recent attempt
     const byStudent = new Map<number, typeof recent[number]>();

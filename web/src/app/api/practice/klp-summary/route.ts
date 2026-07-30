@@ -3,7 +3,7 @@ import { getSessionFromToken } from '@/lib/actions/auth-actions';
 import { getCurrentCycle } from '@/lib/actions/practice-actions';
 import { getKlpOverview, isKlpEnabled } from '@/lib/actions/klp-actions';
 import { getKlpAssignmentsForStudent } from '@/lib/actions/homework-actions';
-import { sqlite } from '@/lib/db';
+import { pool } from '@/lib/db';
 
 interface Row {
   book: string | null;
@@ -22,27 +22,28 @@ export async function GET() {
     if (!user) return Response.json({ error: 'Session expired.' }, { status: 401 });
     if (!user.studentId) return Response.json({ enabled: false, notAStudent: true });
 
-    const enabled = isKlpEnabled();
+    const enabled = await isKlpEnabled();
     if (!enabled) return Response.json({ enabled: false });
 
-    const cycleData = getCurrentCycle(user.studentId);
-    const overview = getKlpOverview();
-    const assignments = getKlpAssignmentsForStudent(user.studentId);
-    const linked = sqlite.prepare(`
+    const cycleData = await getCurrentCycle(user.studentId);
+    const overview = await getKlpOverview();
+    const assignments = await getKlpAssignmentsForStudent(user.studentId);
+    const linked = (await pool.query<Row>(`
       SELECT
         kc.book,
         kc.lesson,
-        COUNT(DISTINCT ptk.practice_task_id) AS linkedTasks,
-        COUNT(DISTINCT akr.klp_concept_id) AS practicedConcepts
+        COUNT(DISTINCT ptk.practice_task_id)::int AS "linkedTasks",
+        COUNT(DISTINCT akr.klp_concept_id)::int AS "practicedConcepts"
       FROM practice_task_klps ptk
       INNER JOIN klp_concepts kc ON kc.id = ptk.klp_concept_id
       LEFT JOIN attempt_klp_results akr
         ON akr.klp_concept_id = kc.id
-        AND akr.student_id = ?
+        AND akr.student_id = $1
       GROUP BY kc.book, kc.lesson
-      ORDER BY CAST(kc.book AS INTEGER), CAST(kc.lesson AS INTEGER)
+      ORDER BY NULLIF(regexp_replace(kc.book, '\\D', '', 'g'), '')::integer NULLS LAST,
+        NULLIF(regexp_replace(kc.lesson, '\\D', '', 'g'), '')::integer NULLS LAST
       LIMIT 5
-    `).all(user.studentId) as Row[];
+    `, [user.studentId])).rows;
 
     return Response.json({
       enabled: true,

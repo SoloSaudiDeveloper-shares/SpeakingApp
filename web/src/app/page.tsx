@@ -40,7 +40,8 @@ export default function LoginPage() {
         return
       }
 
-      window.location.href = "/dashboard"
+      const data = await res.json()
+      window.location.href = data?.user?.mustChangePassword ? "/change-password" : "/dashboard"
     } catch {
       setError("Network error. Please try again.")
     } finally {

@@ -1,14 +1,12 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromToken } from '@/lib/actions/auth-actions';
+import { sessionCookieOptions } from '@/lib/auth/session-cookie';
 
 function unauthorized(message: string) {
   const response = NextResponse.json({ error: message }, { status: 401 });
   response.cookies.set('session-token', '', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.SESSION_COOKIE_SECURE === 'true',
-    path: '/',
+    ...sessionCookieOptions(),
     maxAge: 0,
   });
   response.cookies.set('view-as', '', {
@@ -27,7 +25,7 @@ export async function GET() {
       return unauthorized('Not authenticated.');
     }
 
-    const user = await getSessionFromToken(token);
+    const user = await getSessionFromToken(token, { allowPasswordChange: true });
     if (!user) {
       return unauthorized('Session expired.');
     }

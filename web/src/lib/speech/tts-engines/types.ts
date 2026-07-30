@@ -20,6 +20,7 @@ export interface SpeakOptions {
   voice?: string | null;
   rate?: number;    // 0.5–2.0, 1.0 = normal
   volume?: number;  // 0–1
+  signal?: AbortSignal;
 }
 
 export interface TtsEngine {
@@ -61,27 +62,5 @@ export const TTS_ENGINE_OPTIONS: TtsEngineOption[] = [
     bundled: true,
     description:
       "Uses your operating system's built-in voices. Always available, but quality varies and the most natural Windows voices need internet.",
-  },
-  {
-    id: "kokoro",
-    name: "Kokoro (neural, offline)",
-    offline: true,
-    quality: "Excellent",
-    speed: "Medium (CPU)",
-    size: "~92 MB",
-    bundled: true,
-    description:
-      "High-quality neural voices (American & British, male & female) that run fully offline on the CPU. Best for clear pronunciation models.",
-  },
-  {
-    id: "piper",
-    name: "Piper (neural, offline)",
-    offline: true,
-    quality: "Very good",
-    speed: "Fast (CPU)",
-    size: "downloads on first use",
-    bundled: false,
-    description:
-      "Fast, lightweight neural voices. The voice model downloads once on first use (then cached offline). Snappier than Kokoro, slightly less natural.",
   },
 ];

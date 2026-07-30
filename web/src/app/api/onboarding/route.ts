@@ -10,7 +10,7 @@ export async function GET() {
     const user = await getSessionFromToken(token);
     if (!user) return Response.json({ error: 'Session expired.' }, { status: 401 });
     if (!user.studentId) return Response.json({ onboarded: true, hasDiagnostic: true, notAStudent: true });
-    return Response.json(getOnboardingState(user.studentId));
+    return Response.json(await getOnboardingState(user.studentId));
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });
   }
@@ -28,15 +28,15 @@ export async function POST(request: Request) {
     const body = await request.json();
 
     if (body.action === 'complete-tour') {
-      markOnboarded(user.studentId);
+      await markOnboarded(user.studentId);
       return Response.json({ ok: true });
     }
 
     if (body.action === 'save-diagnostic') {
       const samples: DiagnosticSample[] = Array.isArray(body.samples) ? body.samples : [];
       const result = analyzeDiagnosticSamples(samples);
-      saveDiagnostic(user.studentId, result, body.applyCefr !== false);
-      markOnboarded(user.studentId);
+      await saveDiagnostic(user.studentId, result, body.applyCefr !== false);
+      await markOnboarded(user.studentId);
       return Response.json({ ok: true, result });
     }
 

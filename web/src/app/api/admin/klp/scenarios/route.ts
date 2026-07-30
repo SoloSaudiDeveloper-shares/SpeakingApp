@@ -1,11 +1,11 @@
-import { generateKlpScenario, listGeneratedScenarios, publishGeneratedScenario } from '@/lib/actions/klp-actions';
+import { generateKlpScenario, listGeneratedScenarios, publishGeneratedScenario, updateGeneratedScenarioMaxTurns } from '@/lib/actions/klp-actions';
 import { requireKlpUser } from '../_auth';
 
 export async function GET() {
   try {
     const auth = await requireKlpUser();
     if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
-    return Response.json({ scenarios: listGeneratedScenarios(true) });
+    return Response.json({ scenarios: await listGeneratedScenarios(true) });
   } catch (error) {
     console.error('klp scenarios list error:', error);
     return Response.json({ error: 'KLP scenario list failed.' }, { status: 500 });
@@ -20,7 +20,13 @@ export async function POST(request: Request) {
     if (body.action === 'publish') {
       const id = Number(body.id);
       if (!Number.isInteger(id) || id < 1) return Response.json({ error: 'Invalid scenario id.' }, { status: 400 });
-      return Response.json({ scenario: publishGeneratedScenario(id, body.publish !== false) });
+      return Response.json({ scenario: await publishGeneratedScenario(id, body.publish !== false) });
+    }
+    if (body.action === 'update-turns') {
+      const id = Number(body.id);
+      const maxTurns = Number(body.maxTurns);
+      if (!Number.isInteger(id) || id < 1 || !Number.isFinite(maxTurns)) return Response.json({ error: 'Invalid scenario turn settings.' }, { status: 400 });
+      return Response.json({ scenario: await updateGeneratedScenarioMaxTurns(id, maxTurns) });
     }
     const klpIds = Array.isArray(body.klpIds)
       ? body.klpIds.map((id: unknown) => Number(id)).filter((id: number) => Number.isInteger(id) && id > 0)
@@ -30,6 +36,7 @@ export async function POST(request: Request) {
       klpIds,
       cefrLevel: typeof body.cefrLevel === 'string' ? body.cefrLevel : 'A1',
       progressionMode: typeof body.progressionMode === 'string' ? body.progressionMode : 'guided',
+      maxTurns: Number(body.maxTurns),
       createdByUserId: auth.id,
     });
     return Response.json({ scenario });

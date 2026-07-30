@@ -19,8 +19,8 @@ async function requireAdmin() {
 export async function GET() {
   const auth = await requireAdmin();
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
-  const defaults = getDefaultStageConfig();
-  const overrides = listStudentsWithOverrides();
+  const defaults = await getDefaultStageConfig();
+  const overrides = await listStudentsWithOverrides();
   return Response.json({ defaults, overrides });
 }
 
@@ -28,6 +28,6 @@ export async function POST(req: Request) {
   const auth = await requireAdmin();
   if ('error' in auth) return Response.json({ error: auth.error }, { status: auth.status });
   const body = await req.json();
-  setDefaultStageConfig(body);
-  return Response.json({ ok: true, defaults: getDefaultStageConfig() });
+  await setDefaultStageConfig(body);
+  return Response.json({ ok: true, defaults: await getDefaultStageConfig() });
 }

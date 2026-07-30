@@ -20,11 +20,10 @@ export async function GET() {
     if (!user.studentId) return Response.json({ error: 'Not a student.' }, { status: 403 });
 
     // Get the current student's class
-    const student = db
+    const student = ((await db
       .select()
       .from(students)
-      .where(eq(students.id, user.studentId))
-      .get();
+      .where(eq(students.id, user.studentId)).limit(1))[0]);
 
     if (!student) return Response.json([], { status: 200 });
 
@@ -32,7 +31,7 @@ export async function GET() {
 
     // Get all students in the same class
     const classmates = studentClass
-      ? db.select().from(students).where(eq(students.class, studentClass)).all()
+      ? (await db.select().from(students).where(eq(students.class, studentClass)))
       : [student];
 
     const classmateIds = classmates.map((s) => s.id);
@@ -42,14 +41,13 @@ export async function GET() {
 
     for (const s of classmates) {
       // Get the account display name
-      const account = db
+      const account = ((await db
         .select()
         .from(userAccounts)
-        .where(eq(userAccounts.studentId, s.id))
-        .get();
+        .where(eq(userAccounts.studentId, s.id)).limit(1))[0]);
 
       // Count mastered words across all cycles
-      const masteryCount = db
+      const masteryCount = ((await db
         .select({ count: sql<number>`count(*)` })
         .from(wordMasteryRecords)
         .where(
@@ -57,8 +55,7 @@ export async function GET() {
             eq(wordMasteryRecords.studentId, s.id),
             eq(wordMasteryRecords.masteryStatus, 'Mastered')
           )
-        )
-        .get();
+        ).limit(1))[0]);
 
       results.push({
         studentId: s.id,

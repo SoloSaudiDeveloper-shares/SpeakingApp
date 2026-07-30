@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Mic, MicOff, Volume2, ArrowRight, RotateCcw, Loader2, ArrowLeft, Settings2, AlertTriangle, BookOpen, Sparkles, Eye, MessageSquare, Ear } from "lucide-react"
 import { useAuth } from "@/lib/hooks/use-auth"
-import { speak, prepareActiveTts } from "@/lib/speech/tts"
+import { speak } from "@/lib/speech/tts"
 import { getSpeechEngine, getDefaultEngine, markEngineFailed, DEFAULT_ENGINE_ID } from "@/lib/speech/speech-factory"
 import { recordClientSpeechReliabilityEvent } from "@/lib/speech/reliability-client"
 import { checkWebGPU } from "@/lib/speech/webgpu-check"
@@ -163,6 +163,7 @@ export default function PracticePage() {
   const { user } = useAuth()
   const urlStage = searchParams.get("stage")
   const urlWordId = searchParams.get("wordId")
+  const assignmentId = searchParams.get("assignmentId")
   const [data, setData] = useState<PracticeData | null>(null)
   const [loading, setLoading] = useState(true)
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -215,22 +216,21 @@ export default function PracticePage() {
 
   // Pause detection - configurable from admin STT settings
   const [pauseWarningSeconds, setPauseWarningSeconds] = useState(3)
+  const [scoredPauseThresholdMs, setScoredPauseThresholdMs] = useState(1000)
   const [hasWebGPU, setHasWebGPU] = useState<boolean | null>(null)
 
   useEffect(() => {
     const saved = localStorage.getItem("stt-engine") as STTEngineId | null
     if (saved) { setEngineId(saved); engineRef.current = getSpeechEngine(saved) }
     else { setEngineId(DEFAULT_ENGINE_ID); engineRef.current = getDefaultEngine() }
-    // Warm up the offline STT model + the TTS voice shortly after first paint
-    // (deferred so it never janks the initial render). This makes the first
-    // "Listen" play the Kokoro voice instantly instead of lagging or falling back.
+    // Warm up only the configured STT model. Browser-local TTS acquisition is
+    // an explicit user action in Voice settings.
     const warmId = setTimeout(() => {
       const prep = engineRef.current?.prepare
       if (prep) {
         setEngineLoading(true)
         prep.call(engineRef.current).catch(() => {}).finally(() => setEngineLoading(false))
       }
-      prepareActiveTts().catch(() => {})
     }, 1500)
 
     // Check WebGPU once + whether Azure pronunciation scoring is configured.
@@ -243,6 +243,7 @@ export default function PracticePage() {
         const sec = Number(s.stt_pause_warning_seconds)
         if (!Number.isNaN(sec) && sec > 0) setPauseWarningSeconds(sec)
       }
+      if (s.stt_scored_pause_threshold_ms) setScoredPauseThresholdMs(Math.max(500, Math.min(3000, Number(s.stt_scored_pause_threshold_ms))))
     }).catch(() => {})
 
     fetch("/api/practice").then(r => r.json()).then(d => {
@@ -250,7 +251,10 @@ export default function PracticePage() {
       if (d?.tasks?.length) {
         const requestedWordId = urlWordId ? Number(urlWordId) : 0
         if (Number.isInteger(requestedWordId) && requestedWordId > 0) {
-          const wordIdx = d.tasks.findIndex((t: Task) => t.vocabularyItemId === requestedWordId)
+          const wordIdx = d.tasks.findIndex((t: Task) =>
+            t.vocabularyItemId === requestedWordId
+            && (!urlStage || resolveStage(t.taskType, urlStage) === urlStage),
+          )
           if (wordIdx >= 0) {
             setCurrentIndex(wordIdx)
             return
@@ -306,9 +310,12 @@ export default function PracticePage() {
   const handleListen = useCallback(async () => {
     if (!currentVocab) return
     setSpeaking(true)
-    // Sentence stage: speak the full example sentence; otherwise just the word
-    await speak(stage === "sentence" && currentVocab.exampleSentence ? currentVocab.exampleSentence : currentVocab.word)
-    setSpeaking(false)
+    try {
+      // Sentence stage: speak the full example sentence; otherwise just the word
+      await speak(stage === "sentence" && currentVocab.exampleSentence ? currentVocab.exampleSentence : currentVocab.word)
+    } finally {
+      setSpeaking(false)
+    }
   }, [currentVocab, stage])
 
   /** Listen-only stage: tap "Got it" to mark complete and move on (no recording).
@@ -482,6 +489,8 @@ export default function PracticePage() {
         transcript: actualTranscript,
         audioDurationSeconds: durationSec,
         pauseEvents: pauseEventsRef.current,
+        wordTimings: result.wordTimings,
+        scoredPauseThresholdMs,
         cefrBand: cefr,
       })
       setMetrics(fluencyMetrics)
@@ -512,6 +521,7 @@ export default function PracticePage() {
       let finalTranscript = actualTranscript
       let freeSpeakMetadata: FreeSpeakMetadata | null = null
       let pronunciationWeakWords: PronunciationWeakWordEvidence[] = []
+      let pronunciationAssessment: unknown = null
 
       // Grab the recording (for playback + Azure).
       const recordingBlob = await recordingBlobPromise
@@ -534,6 +544,7 @@ export default function PracticePage() {
           setAzureWords(null)
           setSttError({ engine: "Azure", message: "We couldn't make out clear speech for this word — please try again." })
         } else if (azure) {
+          pronunciationAssessment = azure
           setSttError(null)
           // NEVER replace what the learner actually said with Azure's text.
           // Azure runs WITH the reference word, so its recognized text is
@@ -614,11 +625,13 @@ export default function PracticePage() {
       setFeedback(finalFeedback)
 
       if (data?.cycle && data?.book && currentTask) {
+        const clientSubmissionId = crypto.randomUUID()
         const saveResponse = await fetch("/api/practice/attempt", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             cycleId: data.cycle.id, bookId: data.book.id,
             practiceTaskId: currentTask.id, rawTranscript: finalTranscript,
+            clientSubmissionId,
             targetMatchScore: finalScores.targetMatch,
             pronunciationScore: finalScores.pronunciation,
             fluencyScore: finalScores.fluency,
@@ -631,6 +644,8 @@ export default function PracticePage() {
               expectedText: stageTarget,
               freeSpeak: freeSpeakMetadata,
               pronunciationWeakWords,
+              pronunciationAssessment,
+              pronunciationProvider: pronunciationAssessment ? "azure" : "basic-transcript",
             }),
           }),
         })
@@ -641,6 +656,44 @@ export default function PracticePage() {
             if (saved?.feedback) setFeedback(saved.feedback)
             if (saved?.freeSpeak) setFreeSpeakMeta(saved.freeSpeak)
           }
+          const attemptId = Number(saved?.attempt?.id)
+          if (recordingBlob && Number.isSafeInteger(attemptId) && attemptId > 0) {
+            let recordingSaved = false
+            for (let uploadAttempt = 0; uploadAttempt < 3 && !recordingSaved; uploadAttempt += 1) {
+              try {
+                const upload = await fetch(`/api/attempts/${attemptId}/audio`, {
+                  method: "PUT",
+                  headers: { "Content-Type": recordingBlob.type || "application/octet-stream" },
+                  body: recordingBlob,
+                })
+                recordingSaved = upload.ok
+              } catch {
+                recordingSaved = false
+              }
+              if (!recordingSaved && uploadAttempt < 2) {
+                await new Promise((resolve) => setTimeout(resolve, 250 * (uploadAttempt + 1)))
+              }
+            }
+            if (!recordingSaved) {
+              setSttError({
+                engine: "Recording",
+                message: "Your score was saved, but the recording could not be saved. You can continue or try this item again.",
+              })
+              void recordClientSpeechReliabilityEvent({
+                eventType: "recording",
+                provider: "attempt-audio",
+                route: "attempt-audio-upload",
+                practiceStage: stage,
+                success: false,
+                errorCode: "upload-exhausted",
+              })
+            }
+          }
+        } else {
+          setSttError({
+            engine: "Practice",
+            message: "We could not save this attempt. Please try this item again.",
+          })
         }
       }
     } catch (err) {
@@ -666,7 +719,7 @@ export default function PracticePage() {
       setScores(errScore)
       setFeedback(generateFeedback(errScore, "", currentVocab?.word ? [currentVocab.word] : [], 0))
     } finally { setSubmitting(false) }
-  }, [currentVocab, currentTask, data, engineId, recordingTime, stage, stageExpectedAnswers, stageTarget])
+  }, [currentVocab, currentTask, data, engineId, recordingTime, scoredPauseThresholdMs, stage, stageExpectedAnswers, stageTarget])
 
   const clearRecordedAudio = () => {
     if (recordedAudioUrl) {
@@ -677,6 +730,10 @@ export default function PracticePage() {
   const handleNext = () => {
     clearRecordedAudio()
     setScores(null); setListenDone(false); setRevealed(false); setFeedback(null); setMetrics(null); setFreeSpeakMeta(null); setAzureWords(null); setTranscript(null); setRecordingTime(0); setSttError(null)
+    if (assignmentId) {
+      router.push("/practice/hub")
+      return
+    }
     if (data?.tasks && currentIndex < data.tasks.length - 1) setCurrentIndex(i => i + 1)
     else router.push("/practice/hub")
   }
@@ -685,7 +742,7 @@ export default function PracticePage() {
     setScores(null); setListenDone(false); setRevealed(false); setFeedback(null); setMetrics(null); setFreeSpeakMeta(null); setAzureWords(null); setTranscript(null); setRecordingTime(0); setSttError(null)
   }
   const handleShadowModelAnswer = (text: string) => {
-    void speak(text)
+    void speak(text).catch(() => undefined)
   }
 
   if (loading) return <div className="flex min-h-[60vh] items-center justify-center"><Loader2 size={32} className="animate-spin text-primary" /></div>
@@ -698,10 +755,17 @@ export default function PracticePage() {
     <div className="mx-auto max-w-2xl p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <button onClick={() => router.push("/practice/hub")} className="text-muted-foreground hover:text-foreground transition"><ArrowLeft size={20} /></button>
+        <button
+          type="button"
+          aria-label="Back to practice hub"
+          onClick={() => router.push("/practice/hub")}
+          className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        >
+          <ArrowLeft size={20} aria-hidden="true" />
+        </button>
         <div className="flex items-center gap-3">
           <button onClick={() => setShowEngineSelector(!showEngineSelector)}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition rounded-md border border-border px-2 py-1" title="Speech recognition engine">
+            className="flex min-h-11 items-center gap-1.5 rounded-md border border-border px-3 text-xs text-muted-foreground transition hover:text-foreground" title="Speech recognition engine">
             <Settings2 size={12} /> {engineInfo?.name ?? "STT"}
             {engineInfo?.offline && <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1 rounded">offline</span>}
           </button>
@@ -817,7 +881,7 @@ export default function PracticePage() {
             <div className="pt-1">
               {(revealed || scores)
                 ? <p className="text-2xl font-bold text-primary">{currentVocab?.word}</p>
-                : <button onClick={() => setRevealed(true)} className="text-xs text-muted-foreground underline decoration-dotted hover:text-foreground">Reveal answer</button>}
+                : <button onClick={() => setRevealed(true)} className="min-h-11 rounded-lg px-3 text-xs text-muted-foreground underline decoration-dotted hover:bg-muted hover:text-foreground">Reveal answer</button>}
             </div>
           </>
         ) : stageMeta.mode === "listen" ? (
@@ -889,7 +953,7 @@ export default function PracticePage() {
               <Volume2 size={18} /> {speaking_ ? "Playing..." : "Play"}
             </button>
             <button onClick={handleListenStageComplete}
-              className="flex items-center gap-2 rounded-md border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground hover:bg-muted transition">
+              className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-5 text-sm font-medium text-foreground hover:bg-muted transition">
               Got it <ArrowRight size={14} />
             </button>
           </div>
@@ -898,7 +962,7 @@ export default function PracticePage() {
             <div className="flex items-center justify-center gap-4">
               {stageMeta.showListenButton && (
                 <button onClick={handleListen} disabled={speaking_ || recording}
-                  className="flex items-center gap-2 rounded-md border border-border bg-card px-5 py-2.5 text-sm font-medium text-foreground hover:bg-muted transition disabled:opacity-50">
+                  className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-5 text-sm font-medium text-foreground hover:bg-muted transition disabled:opacity-50">
                   <Volume2 size={16} /> {speaking_ ? "Playing..." : "Listen"}
                 </button>
               )}
@@ -954,10 +1018,10 @@ export default function PracticePage() {
             </p>
           </div>
           <div className="flex items-center justify-center gap-3">
-            <button onClick={() => { setListenDone(false); handleListen() }} className="flex items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition">
+            <button onClick={() => { setListenDone(false); handleListen() }} className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-4 text-sm font-medium text-foreground hover:bg-muted transition">
               <Volume2 size={14} /> Play again
             </button>
-            <button onClick={handleNext} className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition">
+            <button onClick={handleNext} className="flex min-h-11 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 transition">
               Next <ArrowRight size={14} />
             </button>
           </div>
@@ -996,7 +1060,11 @@ export default function PracticePage() {
               />
             </div>
           )}
-          {azureWords && azureWords.length > 0 && <PronunciationBreakdown words={azureWords} />}
+          {stage !== "free-speak" && scores && (
+            azureWords && azureWords.length > 0
+              ? <PronunciationBreakdown words={azureWords} />
+              : <div className="rounded-lg border border-border bg-card p-4 shadow-sm"><div className="flex items-center gap-2"><Mic size={14} className="text-primary" /><h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sound detail</h3></div><p className="mt-2 text-sm text-muted-foreground">{azureConfigured ? "Azure phoneme detail was unavailable for this attempt, so only basic transcript scoring was used." : "Azure Pronunciation Assessment is not configured. This attempt used basic transcript scoring, so word-by-word phoneme detail is not available."}</p></div>
+          )}
           {/* Fluency metrics only make sense for multi-word tasks (sentences/free speech) */}
           {metrics && metrics.wordCount > 1 && (stageMeta.mode === "sentence" || stageMeta.mode === "free") && <FluencyMetricsCard metrics={metrics} />}
           {feedback && (
@@ -1007,10 +1075,10 @@ export default function PracticePage() {
             />
           )}
           <div className="flex items-center justify-center gap-3">
-            <button onClick={handleRetry} className="flex items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition">
+            <button onClick={handleRetry} className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card px-4 text-sm font-medium text-foreground hover:bg-muted transition">
               <RotateCcw size={14} /> Try Again
             </button>
-            <button onClick={handleNext} className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition">
+            <button onClick={handleNext} className="flex min-h-11 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 transition">
               Next <ArrowRight size={14} />
             </button>
           </div>

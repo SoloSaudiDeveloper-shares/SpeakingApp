@@ -1,0 +1,5 @@
+fastapi==0.141.1
+numpy==2.5.1
+pyinstaller==6.21.0
+pykokoro==0.7.2
+uvicorn==0.52.0

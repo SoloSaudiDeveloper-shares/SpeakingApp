@@ -28,14 +28,16 @@
  *   - azure_model               (the DEPLOYMENT name, e.g. "gpt-4o-mini")
  *   - azure_api_version         (legacy only; /openai/v1 endpoints do not allow it)
  *
- * API keys are stored in plain text in the SQLite DB. They're admin-only via
- * the settings POST endpoint and never sent back in the GET response (they're
- * redacted as a fixed mask "••••••••").
+ * API keys are stored through SecretStore: Azure Key Vault in production or
+ * AES-256-GCM encrypted PostgreSQL values in local development. They are
+ * admin-only and responses expose only a fixed configured mask.
  */
 
 import { db } from '../db';
 import { appSettings } from '../db/schema';
 import { eq } from 'drizzle-orm';
+import { getSecretStore } from '@/lib/secrets/secret-store';
+import { PROVIDER_SECRET_SETTING_KEYS } from '@/lib/secrets/sensitive-setting';
 
 export type ProviderId = 'ollama' | 'groq' | 'grok' | 'openai' | 'azure';
 
@@ -100,61 +102,56 @@ function chatCompletionsBody(
 }
 
 /** API keys are sensitive; we should never reveal them after they're stored. */
-export const API_KEY_KEYS: ReadonlySet<string> = new Set([
-  'groq_api_key',
-  'grok_api_key',
-  'openai_api_key',
-  'azure_api_key',
-  'azure_speech_key',
-]);
+export const API_KEY_KEYS = PROVIDER_SECRET_SETTING_KEYS;
 
 export const API_KEY_MASK = '••••••••';
 
-function getSetting(key: string): string | null {
-  const row = db.select().from(appSettings).where(eq(appSettings.key, key)).get();
+async function getSetting(key: string): Promise<string | null> {
+  if (API_KEY_KEYS.has(key)) return await getSecretStore().get(key);
+  const row = ((await db.select().from(appSettings).where(eq(appSettings.key, key)).limit(1))[0]);
   return row?.value ?? null;
 }
 
 /** Look up the configured provider + model + key for the current installation. */
-export function getActiveProvider(): ProviderConfig {
-  const provider = (getSetting('ai_provider') as ProviderId | null) ?? 'ollama';
+export async function getActiveProvider(): Promise<ProviderConfig> {
+  const provider = (await getSetting('ai_provider') as ProviderId | null) ?? 'ollama';
 
   switch (provider) {
     case 'groq':
       return {
         provider: 'groq',
-        model: getSetting('groq_model') ?? DEFAULTS.groq.model,
-        apiKey: getSetting('groq_api_key'),
+        model: await getSetting('groq_model') ?? DEFAULTS.groq.model,
+        apiKey: await getSetting('groq_api_key'),
         baseUrl: DEFAULTS.groq.baseUrl,
       };
     case 'grok':
       return {
         provider: 'grok',
-        model: getSetting('grok_model') ?? DEFAULTS.grok.model,
-        apiKey: getSetting('grok_api_key'),
+        model: await getSetting('grok_model') ?? DEFAULTS.grok.model,
+        apiKey: await getSetting('grok_api_key'),
         baseUrl: DEFAULTS.grok.baseUrl,
       };
     case 'openai':
       return {
         provider: 'openai',
-        model: getSetting('openai_model') ?? DEFAULTS.openai.model,
-        apiKey: getSetting('openai_api_key'),
+        model: await getSetting('openai_model') ?? DEFAULTS.openai.model,
+        apiKey: await getSetting('openai_api_key'),
         baseUrl: DEFAULTS.openai.baseUrl,
       };
     case 'azure':
       return {
         provider: 'azure',
-        model: getSetting('azure_model') ?? DEFAULTS.azure.model, // deployment name
-        apiKey: getSetting('azure_api_key'),
-        baseUrl: getSetting('azure_endpoint') ?? '',
+        model: await getSetting('azure_model') ?? DEFAULTS.azure.model, // deployment name
+        apiKey: await getSetting('azure_api_key'),
+        baseUrl: await getSetting('azure_endpoint') ?? '',
       };
     case 'ollama':
     default:
       return {
         provider: 'ollama',
-        model: getSetting('active_ai_model') ?? DEFAULTS.ollama.model,
+        model: await getSetting('active_ai_model') ?? DEFAULTS.ollama.model,
         apiKey: null,
-        baseUrl: getSetting('ollama_url') ?? DEFAULTS.ollama.baseUrl,
+        baseUrl: await getSetting('ollama_url') ?? DEFAULTS.ollama.baseUrl,
       };
   }
 }
@@ -171,11 +168,11 @@ export function getActiveProvider(): ProviderConfig {
  * the Groq key is the one the app ships with. apiKey is null when unset, so
  * callers fall back to the bundled offline Whisper.
  */
-export function getTranscriptionConfig(): { apiKey: string | null; baseUrl: string; model: string } {
+export async function getTranscriptionConfig(): Promise<{ apiKey: string | null; baseUrl: string; model: string }> {
   return {
-    apiKey: getSetting('groq_api_key'),
+    apiKey: await getSetting('groq_api_key'),
     baseUrl: DEFAULTS.groq.baseUrl,
-    model: getSetting('groq_stt_model') ?? 'whisper-large-v3-turbo',
+    model: await getSetting('groq_stt_model') ?? 'whisper-large-v3-turbo',
   };
 }
 
@@ -184,18 +181,18 @@ export function getTranscriptionConfig(): { apiKey: string | null; baseUrl: stri
  * fluency, completeness, prosody). Returns key=null when unset, so the app
  * gracefully falls back to transcript-based scoring.
  */
-export function getPronunciationConfig(): { apiKey: string | null; region: string } {
+export async function getPronunciationConfig(): Promise<{ apiKey: string | null; region: string }> {
   return {
-    apiKey: getSetting('azure_speech_key'),
-    region: getSetting('azure_speech_region') ?? 'eastus',
+    apiKey: await getSetting('azure_speech_key'),
+    region: await getSetting('azure_speech_region') ?? 'eastus',
   };
 }
 
-export function getAzureSpeechTranscriptionConfig(): { apiKey: string | null; region: string; language: string } {
+export async function getAzureSpeechTranscriptionConfig(): Promise<{ apiKey: string | null; region: string; language: string }> {
   return {
-    apiKey: getSetting('azure_speech_key'),
-    region: getSetting('azure_speech_region') ?? 'eastus',
-    language: getSetting('stt_language') ?? 'en-US',
+    apiKey: await getSetting('azure_speech_key'),
+    region: await getSetting('azure_speech_region') ?? 'eastus',
+    language: await getSetting('stt_language') ?? 'en-US',
   };
 }
 
@@ -203,7 +200,7 @@ export async function callChat(
   messages: { role: 'system' | 'user' | 'assistant'; content: string }[],
   options: { temperature?: number; maxTokens?: number; modelOverride?: string } = {},
 ): Promise<{ content: string; provider: ProviderId; model: string }> {
-  const cfg = getActiveProvider();
+  const cfg = await getActiveProvider();
   const model = options.modelOverride ?? cfg.model;
 
   if (cfg.provider === 'ollama') {
@@ -268,7 +265,7 @@ export async function callChat(
 
 /** Quick health probe for the configured provider. */
 export async function probeProvider(): Promise<{ ok: boolean; provider: ProviderId; detail?: string }> {
-  const cfg = getActiveProvider();
+  const cfg = await getActiveProvider();
 
   if (cfg.provider === 'ollama') {
     try {

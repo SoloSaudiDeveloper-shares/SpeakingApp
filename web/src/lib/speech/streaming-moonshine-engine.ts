@@ -139,11 +139,9 @@ export class StreamingMoonshineEngine implements SpeechEngine {
       env.allowRemoteModels = true
       this.TensorClass = Tensor
 
-      // Detect Electron — its Chromium has incomplete WebGPU subgroup support.
-      const isElectron = typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent)
-      const useGPU = !isElectron && (await this.tryWebGPU())
+      const useGPU = await this.tryWebGPU()
       const device = useGPU ? "webgpu" : "wasm"
-      console.log(`[StreamingMoonshine] Loading on ${device}${isElectron ? " (Electron forces WASM)" : ""}...`)
+      console.log(`[StreamingMoonshine] Loading on ${device}...`)
 
       // VAD
       if (!cachedVad) {

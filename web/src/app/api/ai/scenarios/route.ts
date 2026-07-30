@@ -6,13 +6,13 @@ import { getSessionFromToken } from '@/lib/actions/auth-actions';
 
 export async function GET() {
   try {
-    const generated = listGeneratedScenarios(false).map(generatedScenarioAsScenario);
+    const generated = (await listGeneratedScenarios(false)).map(generatedScenarioAsScenario);
     const all = [...SCENARIOS, ...generated];
     const cookieStore = await cookies();
     const token = cookieStore.get('session-token')?.value;
     const user = token ? await getSessionFromToken(token) : null;
-    const assignedScenarioIds = user?.studentId ? getAssignedKlpScenarioIdsForStudent(user.studentId) : [];
-    const assignedSet = new Set(assignedScenarioIds);
+    const assignedScenarioIds = user?.studentId ? await getAssignedKlpScenarioIdsForStudent(user.studentId) : [];
+    const assignedSet = new Set<string>(assignedScenarioIds);
     const scenarios = assignedSet.size
       ? [...all].sort((a, b) => Number(assignedSet.has(b.id)) - Number(assignedSet.has(a.id)))
       : all;

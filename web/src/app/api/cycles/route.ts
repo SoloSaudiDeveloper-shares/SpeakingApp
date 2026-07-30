@@ -11,7 +11,7 @@ export async function GET() {
     if (!user || (user.role !== 'Admin' && user.role !== 'Teacher'))
       return Response.json({ error: 'Not authorized.' }, { status: 403 });
 
-    return Response.json({ cycles: getCycles() });
+    return Response.json({ cycles: await getCycles() });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });
   }
@@ -27,10 +27,10 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Not authorized.' }, { status: 403 });
 
     const body = await request.json();
-    const cycle = createCycle(body);
+    const cycle = await createCycle(body);
 
     if (body.studentIds?.length) {
-      enrollStudents(cycle.id, body.studentIds);
+      await enrollStudents(cycle.id, body.studentIds);
     }
 
     return Response.json({ cycle });

@@ -1,0 +1,1 @@
+ALTER TABLE "xapi_outbox" ALTER COLUMN "next_attempt_at" DROP NOT NULL;

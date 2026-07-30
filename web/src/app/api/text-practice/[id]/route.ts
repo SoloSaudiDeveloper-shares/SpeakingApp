@@ -18,7 +18,7 @@ export async function GET(
     const textId = parseInt(id, 10);
     if (isNaN(textId)) return Response.json({ error: 'Invalid ID.' }, { status: 400 });
 
-    const text = getTextById(textId);
+    const text = await getTextById(textId);
     if (!text) return Response.json({ error: 'Text not found.' }, { status: 404 });
 
     return Response.json({ text });
@@ -43,7 +43,7 @@ export async function DELETE(
     const textId = parseInt(id, 10);
     if (isNaN(textId)) return Response.json({ error: 'Invalid ID.' }, { status: 400 });
 
-    deleteText(textId);
+    await deleteText(textId);
     return Response.json({ success: true });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });

@@ -41,6 +41,7 @@ export interface FluencyMetrics {
   totalPauseSeconds: number;
   meanLengthOfRun: number;
   fluencyIndex: number; // 0–1
+  scoredPauseThresholdMs?: number;
 }
 
 export interface ComputeFluencyInput {
@@ -49,6 +50,7 @@ export interface ComputeFluencyInput {
   pauseEvents?: PauseEvent[];
   wordTimings?: WordTiming[];
   cefrBand?: CefrBand;
+  scoredPauseThresholdMs?: number;
 }
 
 function countWords(text: string): number {
@@ -81,14 +83,15 @@ export function computeFluencyMetrics(input: ComputeFluencyInput): FluencyMetric
   const band = input.cefrBand ?? 'A1';
   const duration = Math.max(0, input.audioDurationSeconds);
   const wordCount = countWords(input.transcript);
+  const scoredPauseThresholdMs = Math.max(500, Math.min(3000, Math.round(input.scoredPauseThresholdMs ?? 1000)));
 
   // ── Pause aggregation ─────────────────────────────────────────────
   let pauseCount: number;
   let totalPauseSeconds: number;
 
   if (input.wordTimings && input.wordTimings.length > 1) {
-    // Exact: gaps between consecutive words (≥ 250ms counts as a pause)
-    const PAUSE_MIN = 0.25;
+    // Exact: gaps between consecutive words use the separate scoring threshold.
+    const PAUSE_MIN = scoredPauseThresholdMs / 1000;
     let count = 0;
     let total = 0;
     for (let i = 1; i < input.wordTimings.length; i++) {
@@ -98,7 +101,7 @@ export function computeFluencyMetrics(input: ComputeFluencyInput): FluencyMetric
     pauseCount = count;
     totalPauseSeconds = total;
   } else {
-    const events = input.pauseEvents ?? [];
+    const events = (input.pauseEvents ?? []).filter((event) => event.durationMs >= scoredPauseThresholdMs);
     pauseCount = events.length;
     totalPauseSeconds = events.reduce((s, e) => s + e.durationMs / 1000, 0);
   }
@@ -154,6 +157,7 @@ export function computeFluencyMetrics(input: ComputeFluencyInput): FluencyMetric
     totalPauseSeconds: Math.round(totalPauseSeconds * 100) / 100,
     meanLengthOfRun: Math.round(meanLengthOfRun * 10) / 10,
     fluencyIndex: Math.round(fluencyIndex * 1000) / 1000,
+    scoredPauseThresholdMs,
   };
 }
 

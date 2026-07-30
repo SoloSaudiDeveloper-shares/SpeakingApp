@@ -11,31 +11,28 @@ import {
 } from '../db/schema';
 import { eq, and, desc, count, isNull } from 'drizzle-orm';
 
-export function getTeacherDashboard() {
-  const allStudents = db.select().from(students).where(eq(students.isActive, true)).all();
+export async function getTeacherDashboard() {
+  const allStudents = (await db.select().from(students).where(eq(students.isActive, true)));
 
-  return allStudents.map((s) => {
-    const flagCount = db
+  return allStudents.map(async (s) => {
+    const flagCount = ((await db
       .select({ value: count() })
       .from(teacherFlags)
-      .where(and(eq(teacherFlags.studentId, s.id), isNull(teacherFlags.resolvedAt)))
-      .get();
+      .where(and(eq(teacherFlags.studentId, s.id), isNull(teacherFlags.resolvedAt))).limit(1))[0]);
 
     // Total attempts (for the count column)
-    const totalCount = db
+    const totalCount = ((await db
       .select({ value: count() })
       .from(attempts)
-      .where(eq(attempts.studentId, s.id))
-      .get();
+      .where(eq(attempts.studentId, s.id)).limit(1))[0]);
 
     // Average across recent attempts (for a current-performance signal)
-    const recentAttempts = db
+    const recentAttempts = (await db
       .select()
       .from(attempts)
       .where(eq(attempts.studentId, s.id))
       .orderBy(desc(attempts.timestamp))
-      .limit(20)
-      .all();
+      .limit(20));
 
     const avgScore = recentAttempts.length
       ? recentAttempts.reduce((sum, a) => sum + a.compositeScore, 0) / recentAttempts.length
@@ -50,30 +47,28 @@ export function getTeacherDashboard() {
   });
 }
 
-export function getStudentReview(studentId: number) {
-  const student = db.select().from(students).where(eq(students.id, studentId)).get();
+export async function getStudentReview(studentId: number) {
+  const student = ((await db.select().from(students).where(eq(students.id, studentId)).limit(1))[0]);
   if (!student) return null;
 
-  const enrollments = db
+  const enrollments = (await db
     .select()
     .from(studentCycles)
-    .where(eq(studentCycles.studentId, studentId))
-    .all();
+    .where(eq(studentCycles.studentId, studentId)));
 
   const latestEnrollment = enrollments[enrollments.length - 1];
   if (!latestEnrollment) return { student, cycle: null, book: null, attempts: [], mastery: [] };
 
-  const cycle = db.select().from(cycles).where(eq(cycles.id, latestEnrollment.cycleId)).get();
-  const book = cycle ? db.select().from(books).where(eq(books.id, cycle.bookId)).get() : null;
+  const cycle = ((await db.select().from(cycles).where(eq(cycles.id, latestEnrollment.cycleId)).limit(1))[0]);
+  const book = cycle ? ((await db.select().from(books).where(eq(books.id, cycle.bookId)).limit(1))[0]) : null;
 
-  const studentAttempts = db
+  const studentAttempts = (await db
     .select()
     .from(attempts)
     .where(and(eq(attempts.studentId, studentId), eq(attempts.cycleId, latestEnrollment.cycleId)))
-    .orderBy(desc(attempts.timestamp))
-    .all();
+    .orderBy(desc(attempts.timestamp)));
 
-  const mastery = db
+  const mastery = (await db
     .select()
     .from(wordMasteryRecords)
     .where(
@@ -81,11 +76,10 @@ export function getStudentReview(studentId: number) {
         eq(wordMasteryRecords.studentId, studentId),
         eq(wordMasteryRecords.cycleId, latestEnrollment.cycleId)
       )
-    )
-    .all();
+    ));
 
   const vocab = book
-    ? db.select().from(vocabularyItems).where(eq(vocabularyItems.bookId, book.id)).all()
+    ? (await db.select().from(vocabularyItems).where(eq(vocabularyItems.bookId, book.id)))
     : [];
 
   return {
@@ -101,12 +95,11 @@ export function getStudentReview(studentId: number) {
   };
 }
 
-export function overrideAttemptScore(attemptId: number, score: number, notes: string) {
-  db.update(attempts)
+export async function overrideAttemptScore(attemptId: number, score: number, notes: string) {
+  (await db.update(attempts)
     .set({
       teacherOverrideScore: score,
       teacherNotes: notes,
     })
-    .where(eq(attempts.id, attemptId))
-    .run();
+    .where(eq(attempts.id, attemptId)));
 }

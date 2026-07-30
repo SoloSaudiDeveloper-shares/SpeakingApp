@@ -24,15 +24,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const { id } = await params;
     const studentId = Number(id);
 
-    const student = db.select().from(students).where(eq(students.id, studentId)).get();
+    const student = ((await db.select().from(students).where(eq(students.id, studentId)).limit(1))[0]);
     if (!student) return Response.json({ error: 'Student not found.' }, { status: 404 });
 
-    const cycleData = getCurrentCycle(studentId);
-    let attempts: ReturnType<typeof getStudentAttempts> = [];
-    let mastery: ReturnType<typeof getWordMastery> = [];
+    const cycleData = await getCurrentCycle(studentId);
+    let attempts: Awaited<ReturnType<typeof getStudentAttempts>> = [];
+    let mastery: Awaited<ReturnType<typeof getWordMastery>> = [];
     if (cycleData) {
-      attempts = getStudentAttempts(studentId, cycleData.cycle.id);
-      mastery = getWordMastery(studentId, cycleData.cycle.id);
+      attempts = await getStudentAttempts(studentId, cycleData.cycle.id);
+      mastery = await getWordMastery(studentId, cycleData.cycle.id);
     }
 
     return Response.json({

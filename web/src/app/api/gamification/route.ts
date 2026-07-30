@@ -21,11 +21,11 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const className = searchParams.get('className') ?? undefined;
 
-    const xp = getStudentXp(user.studentId);
-    const studentBadges = getStudentBadges(user.studentId);
-    const streak = getStreak(user.studentId);
-    const dailyGoal = getDailyGoal(user.studentId);
-    const leaderboard = getLeaderboard(className);
+    const xp = await getStudentXp(user.studentId);
+    const studentBadges = await getStudentBadges(user.studentId);
+    const streak = await getStreak(user.studentId);
+    const dailyGoal = await getDailyGoal(user.studentId);
+    const leaderboard = await getLeaderboard(className);
 
     return Response.json({ xp, badges: studentBadges, streak, dailyGoal, leaderboard });
   } catch {

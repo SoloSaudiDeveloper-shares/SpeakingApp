@@ -20,12 +20,12 @@ export async function GET(request: Request) {
     if (cycleIdParam) {
       cycleId = Number(cycleIdParam);
     } else {
-      const cycleData = getCurrentCycle(user.studentId);
+      const cycleData = await getCurrentCycle(user.studentId);
       if (!cycleData) return Response.json({ queue: [] });
       cycleId = cycleData.cycle.id;
     }
 
-    const queue = getReviewQueue(user.studentId, cycleId);
+    const queue = await getReviewQueue(user.studentId, cycleId);
 
     return Response.json({ queue });
   } catch {

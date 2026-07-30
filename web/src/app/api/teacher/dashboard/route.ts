@@ -11,7 +11,7 @@ export async function GET() {
     if (!user || (user.role !== 'Admin' && user.role !== 'Teacher')) {
       return Response.json({ error: 'Not authorized.' }, { status: 403 });
     }
-    return Response.json({ students: getTeacherDashboard() });
+    return Response.json({ students: await getTeacherDashboard() });
   } catch (e) {
     console.error('teacher dashboard error:', e);
     return Response.json({ error: 'Internal server error.' }, { status: 500 });

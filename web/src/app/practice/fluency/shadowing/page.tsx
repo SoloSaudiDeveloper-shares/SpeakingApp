@@ -83,10 +83,13 @@ export default function ShadowingPage() {
     if (!sentence) return
     setSpeaking(true)
     const t0 = Date.now()
-    await speak(sentence)
-    refDurationRef.current = (Date.now() - t0) / 1000
-    setSpeaking(false)
-    setPhase("ready")
+    try {
+      await speak(sentence)
+      refDurationRef.current = (Date.now() - t0) / 1000
+    } finally {
+      setSpeaking(false)
+      setPhase("ready")
+    }
   }, [sentence])
 
   const startRecord = useCallback(async () => {
@@ -333,9 +336,9 @@ export default function ShadowingPage() {
               Model: {results[idx].refDurationSec}s · You: {results[idx].studentDurationSec}s
             </p>
           </div>
-          {results[idx].azureWords && results[idx].azureWords!.length > 0 && (
-            <PronunciationBreakdown words={results[idx].azureWords!} />
-          )}
+          {results[idx].azureWords && results[idx].azureWords!.length > 0
+            ? <PronunciationBreakdown words={results[idx].azureWords!} />
+            : <div className="rounded-lg border border-border bg-card p-4"><div className="flex items-center gap-2"><Mic size={14} className="text-primary" /><h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sound detail</h3></div><p className="mt-2 text-sm text-muted-foreground">Only basic transcript and rhythm scoring was available for this attempt, so phoneme-level detail is not shown.</p></div>}
           <div className="flex justify-center">
             <button onClick={next}
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-semibold text-primary-foreground hover:opacity-90">

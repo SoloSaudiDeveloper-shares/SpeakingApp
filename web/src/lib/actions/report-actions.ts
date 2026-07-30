@@ -1,5 +1,5 @@
-import { desc, eq } from 'drizzle-orm';
-import { db, sqlite } from '@/lib/db';
+import { desc, eq, inArray } from 'drizzle-orm';
+import { db } from '@/lib/db';
 import {
   attemptKlpResults,
   attempts,
@@ -171,8 +171,8 @@ function statusNeedsPractice(status: string, latestScore: number, bestScore: num
   return status !== 'Mastered' || latestScore < 0.75 || bestScore < 0.85;
 }
 
-export function getReportOverview(filters: ReportFilters = {}): ReportOverview {
-  const allStudents = db.select().from(students).where(eq(students.isActive, true)).all();
+export async function getReportOverview(filters: ReportFilters = {}): Promise<ReportOverview> {
+  const allStudents = (await db.select().from(students).where(eq(students.isActive, true)));
   const selectedStudents = allStudents.filter((student) => {
     if (filters.studentId && student.id !== filters.studentId) return false;
     if (filters.className && (student.class ?? 'Unassigned') !== filters.className) return false;
@@ -181,7 +181,7 @@ export function getReportOverview(filters: ReportFilters = {}): ReportOverview {
   });
   const selectedStudentIds = new Set(selectedStudents.map((student) => student.id));
 
-  const attemptRows = db
+  const attemptRows = (await db
     .select({
       id: attempts.id,
       studentId: attempts.studentId,
@@ -201,13 +201,12 @@ export function getReportOverview(filters: ReportFilters = {}): ReportOverview {
     .from(attempts)
     .leftJoin(practiceTasks, eq(practiceTasks.id, attempts.practiceTaskId))
     .leftJoin(vocabularyItems, eq(vocabularyItems.id, practiceTasks.vocabularyItemId))
-    .orderBy(desc(attempts.timestamp))
-    .all()
+    .orderBy(desc(attempts.timestamp)))
     .filter((attempt) => selectedStudentIds.has(attempt.studentId));
 
   const filteredAttempts = attemptRows.filter((attempt) => inDateRange(attempt.timestamp, filters));
-  const allMastery = db.select().from(wordMasteryRecords).all().filter((record) => selectedStudentIds.has(record.studentId));
-  const vocab = db.select().from(vocabularyItems).all();
+  const allMastery = (await db.select().from(wordMasteryRecords)).filter((record) => selectedStudentIds.has(record.studentId));
+  const vocab = (await db.select().from(vocabularyItems));
   const vocabById = new Map(vocab.map((item) => [item.id, item]));
   const studentById = new Map(selectedStudents.map((student) => [student.id, student]));
   const attemptsByStudent = new Map<number, typeof filteredAttempts>();
@@ -385,8 +384,8 @@ export function getReportOverview(filters: ReportFilters = {}): ReportOverview {
   };
 }
 
-export function getClassReport(filters: ReportFilters = {}) {
-  const overview = getReportOverview(filters);
+export async function getClassReport(filters: ReportFilters = {}) {
+  const overview = await getReportOverview(filters);
   return {
     generatedAt: overview.generatedAt,
     filters: overview.filters,
@@ -396,10 +395,10 @@ export function getClassReport(filters: ReportFilters = {}) {
   };
 }
 
-export function getStudentReport(studentId: number, filters: ReportFilters = {}) {
-  const overview = getReportOverview({ ...filters, studentId });
+export async function getStudentReport(studentId: number, filters: ReportFilters = {}) {
+  const overview = await getReportOverview({ ...filters, studentId });
   const student = overview.students.find((item) => item.id === studentId) ?? null;
-  const attemptsForStudent = db
+  const attemptsForStudent = (await db
     .select({
       id: attempts.id,
       timestamp: attempts.timestamp,
@@ -419,8 +418,7 @@ export function getStudentReport(studentId: number, filters: ReportFilters = {})
     .leftJoin(practiceTasks, eq(practiceTasks.id, attempts.practiceTaskId))
     .leftJoin(vocabularyItems, eq(vocabularyItems.id, practiceTasks.vocabularyItemId))
     .where(eq(attempts.studentId, studentId))
-    .orderBy(desc(attempts.timestamp))
-    .all()
+    .orderBy(desc(attempts.timestamp)))
     .filter((attempt) => inDateRange(attempt.timestamp, filters))
     .slice(0, 50);
   return {
@@ -432,8 +430,8 @@ export function getStudentReport(studentId: number, filters: ReportFilters = {})
   };
 }
 
-export function getAudioReport(filters: ReportFilters = {}) {
-  const overview = getReportOverview(filters);
+export async function getAudioReport(filters: ReportFilters = {}) {
+  const overview = await getReportOverview(filters);
   return {
     generatedAt: overview.generatedAt,
     filters: overview.filters,
@@ -499,8 +497,8 @@ function uniqueSorted(values: Iterable<string>) {
   return Array.from(new Set(Array.from(values).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }
 
-export function getKlpEvidenceReport(filters: ReportFilters = {}): KlpEvidenceReport {
-  const selectedStudents = db.select().from(students).where(eq(students.isActive, true)).all().filter((student) => {
+export async function getKlpEvidenceReport(filters: ReportFilters = {}): Promise<KlpEvidenceReport> {
+  const selectedStudents = (await db.select().from(students).where(eq(students.isActive, true))).filter((student) => {
     if (filters.studentId && student.id !== filters.studentId) return false;
     if (filters.className && (student.class ?? 'Unassigned') !== filters.className) return false;
     if (filters.cefr && student.cefrBand !== filters.cefr) return false;
@@ -509,7 +507,7 @@ export function getKlpEvidenceReport(filters: ReportFilters = {}): KlpEvidenceRe
   const selectedStudentIds = new Set(selectedStudents.map((student) => student.id));
   const selectedStudentsById = new Map(selectedStudents.map((student) => [student.id, student]));
   const cycleIdsByStudent = new Map<number, Set<number>>();
-  for (const enrollment of db.select().from(studentCycles).all()) {
+  for (const enrollment of (await db.select().from(studentCycles))) {
     if (!selectedStudentIds.has(enrollment.studentId)) continue;
     const set = cycleIdsByStudent.get(enrollment.studentId) ?? new Set<number>();
     set.add(enrollment.cycleId);
@@ -520,7 +518,7 @@ export function getKlpEvidenceReport(filters: ReportFilters = {}): KlpEvidenceRe
   const assignedTaskTypesByKlp = new Map<number, Set<string>>();
   const assignedScenarioIdsByKlp = new Map<number, Set<string>>();
 
-  const assignments = db.select().from(homeworkAssignments).all().filter((assignment) => {
+  const assignments = (await db.select().from(homeworkAssignments)).filter((assignment) => {
     if (assignment.source !== 'klp' || assignment.status === 'archived') return false;
     return cleanNumberArray(assignment.klpIdsJson).length > 0 || cleanStringArray(assignment.scenarioIdsJson).length > 0;
   });
@@ -543,7 +541,7 @@ export function getKlpEvidenceReport(filters: ReportFilters = {}): KlpEvidenceRe
     }
   }
 
-  const resultRows = db
+  const resultRows = (await db
     .select({
       id: attemptKlpResults.id,
       studentId: attemptKlpResults.studentId,
@@ -564,8 +562,7 @@ export function getKlpEvidenceReport(filters: ReportFilters = {}): KlpEvidenceRe
     })
     .from(attemptKlpResults)
     .innerJoin(klpConcepts, eq(klpConcepts.id, attemptKlpResults.klpConceptId))
-    .orderBy(desc(attemptKlpResults.createdAt))
-    .all()
+    .orderBy(desc(attemptKlpResults.createdAt)))
     .filter((row) => selectedStudentIds.has(row.studentId) && inDateRange(row.createdAt, filters));
 
   const conceptIds = new Set<number>([
@@ -573,22 +570,17 @@ export function getKlpEvidenceReport(filters: ReportFilters = {}): KlpEvidenceRe
     ...resultRows.map((row) => row.klpId),
   ]);
   const conceptRows = conceptIds.size
-    ? sqlite.prepare(`
-        SELECT id, concept_id AS conceptId, book, lesson, domain, base_item AS baseItem,
-               subtype, definition, support_status AS supportStatus
-        FROM klp_concepts
-        WHERE id IN (${Array.from(conceptIds).map(() => '?').join(',')})
-      `).all(...Array.from(conceptIds)) as Array<{
-        id: number;
-        conceptId: string;
-        book: string | null;
-        lesson: string | null;
-        domain: string;
-        baseItem: string | null;
-        subtype: string | null;
-        definition: string | null;
-        supportStatus: string;
-      }>
+    ? await db.select({
+        id: klpConcepts.id,
+        conceptId: klpConcepts.conceptId,
+        book: klpConcepts.book,
+        lesson: klpConcepts.lesson,
+        domain: klpConcepts.domain,
+        baseItem: klpConcepts.baseItem,
+        subtype: klpConcepts.subtype,
+        definition: klpConcepts.definition,
+        supportStatus: klpConcepts.supportStatus,
+      }).from(klpConcepts).where(inArray(klpConcepts.id, Array.from(conceptIds)))
     : [];
   const conceptById = new Map(conceptRows.map((row) => [Number(row.id), row]));
 
@@ -608,19 +600,17 @@ export function getKlpEvidenceReport(filters: ReportFilters = {}): KlpEvidenceRe
     else addToSetMap(weakStudentsByKlp, row.klpId, row.studentId);
   }
 
-  const taskLinks = db
+  const taskLinks = (await db
     .select({ klpId: practiceTaskKlps.klpConceptId, taskType: practiceTasks.taskType })
     .from(practiceTaskKlps)
-    .innerJoin(practiceTasks, eq(practiceTasks.id, practiceTaskKlps.practiceTaskId))
-    .all();
+    .innerJoin(practiceTasks, eq(practiceTasks.id, practiceTaskKlps.practiceTaskId)));
   const taskTypesByKlp = new Map<number, Set<string>>();
   for (const link of taskLinks) addToSetMap(taskTypesByKlp, link.klpId, link.taskType);
 
-  const scenarioLinks = db
+  const scenarioLinks = (await db
     .select({ klpId: scenarioKlps.klpConceptId, scenarioId: scenarioKlps.scenarioId, title: klpGeneratedScenarios.title })
     .from(scenarioKlps)
-    .leftJoin(klpGeneratedScenarios, eq(klpGeneratedScenarios.scenarioId, scenarioKlps.scenarioId))
-    .all();
+    .leftJoin(klpGeneratedScenarios, eq(klpGeneratedScenarios.scenarioId, scenarioKlps.scenarioId)));
   const scenariosByKlp = new Map<number, Map<string, string>>();
   for (const link of scenarioLinks) {
     const map = scenariosByKlp.get(link.klpId) ?? new Map<string, string>();
@@ -754,11 +744,11 @@ export function buildStudentTutorInsightFromSummary(student: StudentReportSummar
   };
 }
 
-export function getStudentTutorInsight(studentId: number) {
-  const overview = getReportOverview({ studentId });
+export async function getStudentTutorInsight(studentId: number) {
+  const overview = await getReportOverview({ studentId });
   const student = overview.students[0];
   if (!student) return null;
-  const klpAssignments = getKlpAssignmentsForStudent(studentId);
+  const klpAssignments = await getKlpAssignmentsForStudent(studentId);
   const deterministic = buildStudentTutorInsightFromSummary(student, overview.topWeakWords);
   if (klpAssignments.length > 0) {
     const first = klpAssignments[0];

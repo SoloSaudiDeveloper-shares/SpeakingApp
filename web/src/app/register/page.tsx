@@ -26,8 +26,8 @@ export default function RegisterPage() {
       return
     }
 
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters.")
+    if (password.length < 12) {
+      setError("Password must be at least 12 characters.")
       return
     }
 
@@ -163,7 +163,7 @@ export default function RegisterPage() {
                   type={showPassword ? "text" : "password"}
                   autoComplete="new-password"
                   required
-                  placeholder="Min. 6 characters"
+                  placeholder="Min. 12 characters"
                   className="w-full rounded-lg border border-input bg-background px-3 py-2.5 pr-10 text-sm text-foreground placeholder:text-muted-foreground/60 transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/25"
                 />
                 <button

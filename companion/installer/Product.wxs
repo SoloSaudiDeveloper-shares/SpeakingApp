@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package
+    Name="Speaking Lab Voice Companion"
+    Manufacturer="Speaking Lab"
+    Version="$(PackageVersion)"
+    UpgradeCode="DF69C19B-E16B-4876-9B15-EF0B4E62D596"
+    Language="1033"
+    Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer Speaking Lab Voice Companion is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="APPORIGIN" Value="$(AppOrigin)" Secure="yes" />
+    <Property Id="MODELBASEURL" Value="$(ModelBaseUrl)" Secure="yes" />
+
+    <Feature Id="MainFeature" Title="Speaking Lab Voice Companion" Level="1">
+      <ComponentGroupRef Id="ServiceComponents" />
+      <ComponentGroupRef Id="DataComponents" />
+    </Feature>
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Speaking Lab Voice Companion" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="CompanyDataFolder" Name="SpeakingLab">
+        <Directory Id="CompanionDataFolder" Name="Companion" />
+      </Directory>
+    </StandardDirectory>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="DataComponents" Directory="CompanionDataFolder">
+      <Component Id="CompanionDataAcl" Guid="98A14C8A-8F77-49B5-A4FE-6F86E511A655">
+        <CreateFolder>
+          <util:PermissionEx User="Administrators" GenericAll="yes" />
+          <util:PermissionEx User="LOCAL SERVICE" GenericAll="yes" />
+        </CreateFolder>
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="ServiceComponents" Directory="INSTALLFOLDER">
+      <Component Id="CompanionService" Guid="4D865DDA-F295-4994-AB89-16AE3136E2C4" Bitness="always64">
+        <File
+          Id="CompanionExe"
+          Source="$(ServiceSource)\SpeakingLab.Companion.exe"
+          KeyPath="yes" />
+        <ServiceInstall
+          Id="InstallCompanionService"
+          Name="SpeakingLabVoiceCompanion"
+          DisplayName="Speaking Lab Voice Companion"
+          Description="Provides authenticated local text-to-speech models to Speaking Lab."
+          Type="ownProcess"
+          Start="auto"
+          Account="NT AUTHORITY\LocalService"
+          ErrorControl="normal"
+          Arguments="--data-dir &quot;[CommonAppDataFolder]SpeakingLab\Companion&quot; --allowed-origin &quot;[APPORIGIN]&quot; --worker-executable &quot;[INSTALLFOLDER]SpeakingLab.KokoroWorker.exe&quot; --model-base-url &quot;[MODELBASEURL]&quot; --model-signing-public-key &quot;[INSTALLFOLDER]voice-model-public.pem&quot;" />
+        <ServiceControl
+          Id="ControlCompanionService"
+          Name="SpeakingLabVoiceCompanion"
+          Start="install"
+          Stop="both"
+          Remove="uninstall"
+          Wait="yes" />
+        <File
+          Id="KokoroWorkerExe"
+          Source="$(WorkerSource)\SpeakingLab.KokoroWorker.exe" />
+        <File
+          Id="VoiceModelPublicKey"
+          Source="$(ModelPublicKeySource)\voice-model-public.pem" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

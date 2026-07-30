@@ -1,12 +1,11 @@
 import { db } from '../db';
-import { sqlite } from '../db';
 import { spacedRepetitionQueue, vocabularyItems } from '../db/schema';
 import { eq, and, lte } from 'drizzle-orm';
 
-export function getReviewQueue(studentId: number, cycleId: number) {
+export async function getReviewQueue(studentId: number, cycleId: number) {
   const today = new Date().toISOString().split('T')[0];
 
-  const queue = db
+  const queue = (await db
     .select({
       id: spacedRepetitionQueue.id,
       studentId: spacedRepetitionQueue.studentId,
@@ -32,8 +31,7 @@ export function getReviewQueue(studentId: number, cycleId: number) {
         eq(spacedRepetitionQueue.cycleId, cycleId),
         lte(spacedRepetitionQueue.nextReviewDate, today)
       )
-    )
-    .all();
+    ));
 
   return queue;
 }
@@ -42,7 +40,7 @@ export function getReviewQueue(studentId: number, cycleId: number) {
  * SM-2 algorithm: process a review and update the spaced repetition queue.
  * score is a composite score from 0 to 1.
  */
-export function processReview(
+export async function processReview(
   studentId: number,
   vocabularyItemId: number,
   cycleId: number,
@@ -50,7 +48,7 @@ export function processReview(
 ) {
   const today = new Date().toISOString().split('T')[0];
 
-  const item = db
+  const item = ((await db
     .select()
     .from(spacedRepetitionQueue)
     .where(
@@ -59,8 +57,7 @@ export function processReview(
         eq(spacedRepetitionQueue.vocabularyItemId, vocabularyItemId),
         eq(spacedRepetitionQueue.cycleId, cycleId)
       )
-    )
-    .get();
+    ).limit(1))[0]);
 
   if (!item) return null;
 
@@ -95,7 +92,7 @@ export function processReview(
   nextDate.setDate(nextDate.getDate() + interval);
   const nextReviewDate = nextDate.toISOString().split('T')[0];
 
-  db.update(spacedRepetitionQueue)
+  (await db.update(spacedRepetitionQueue)
     .set({
       interval,
       easeFactor,
@@ -103,8 +100,7 @@ export function processReview(
       nextReviewDate,
       lastReviewDate: today,
     })
-    .where(eq(spacedRepetitionQueue.id, item.id))
-    .run();
+    .where(eq(spacedRepetitionQueue.id, item.id)));
 
   return {
     id: item.id,
@@ -116,7 +112,7 @@ export function processReview(
   };
 }
 
-export function initializeQueue(
+export async function initializeQueue(
   studentId: number,
   cycleId: number,
   vocabularyItemIds: number[]
@@ -126,7 +122,7 @@ export function initializeQueue(
 
   for (const vocabId of vocabularyItemIds) {
     // Check if already in queue
-    const existing = db
+    const existing = ((await db
       .select()
       .from(spacedRepetitionQueue)
       .where(
@@ -135,11 +131,10 @@ export function initializeQueue(
           eq(spacedRepetitionQueue.vocabularyItemId, vocabId),
           eq(spacedRepetitionQueue.cycleId, cycleId)
         )
-      )
-      .get();
+      ).limit(1))[0]);
 
     if (!existing) {
-      db.insert(spacedRepetitionQueue)
+      (await db.insert(spacedRepetitionQueue)
         .values({
           studentId,
           vocabularyItemId: vocabId,
@@ -148,8 +143,7 @@ export function initializeQueue(
           easeFactor: 2.5,
           repetitions: 0,
           nextReviewDate: today,
-        })
-        .run();
+        }));
       added.push(vocabId);
     }
   }

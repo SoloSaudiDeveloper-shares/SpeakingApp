@@ -2,25 +2,20 @@
 
 import type { TtsEngine, TtsEngineId } from "./tts-engines/types"
 import { BrowserTtsEngine } from "./tts-engines/browser-tts-engine"
-import { KokoroTtsEngine } from "./tts-engines/kokoro-tts-engine"
-import { PiperTtsEngine } from "./tts-engines/piper-tts-engine"
 
 /**
- * The active TTS voice by default. Kokoro (bundled, offline, neural) is the
- * default so the app sounds production-grade out of the box; the Browser/System
- * voice and Piper remain selectable, but Browser starts deactivated.
+ * The web runtime only owns the operating-system voice. Neural local speech is
+ * served by the authenticated Windows companion and is never instantiated in
+ * the production browser bundle.
  */
-export const DEFAULT_TTS_ENGINE_ID: TtsEngineId = "kokoro"
+export const DEFAULT_TTS_ENGINE_ID: TtsEngineId = "browser-tts"
 
 const cache = new Map<TtsEngineId, TtsEngine>()
 const failed = new Set<TtsEngineId>()
 
 function create(id: TtsEngineId): TtsEngine {
-  switch (id) {
-    case "kokoro": return new KokoroTtsEngine()
-    case "piper":  return new PiperTtsEngine()
-    default:        return new BrowserTtsEngine()
-  }
+  void id
+  return new BrowserTtsEngine()
 }
 
 /** Get (and cache) a TTS engine by id. Falls back to the browser engine if a

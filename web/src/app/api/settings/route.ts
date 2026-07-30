@@ -1,7 +1,12 @@
-import { cookies } from 'next/headers';
-import { getSessionFromToken } from '@/lib/actions/auth-actions';
+import { requireAuthenticated } from '@/lib/auth/authorization';
 import { getAppSettings, updateAppSetting } from '@/lib/actions/admin-actions';
 import { API_KEY_KEYS, API_KEY_MASK } from '@/lib/ai/providers';
+import { getSecretStore } from '@/lib/secrets/secret-store';
+import { isSecretLikeSettingKey } from '@/lib/secrets/sensitive-setting';
+import {
+  settingWriteDecision,
+  validateSettingValue,
+} from '@/lib/security/settings-policy';
 
 /**
  * Sensitive settings (API keys, etc.) that should never be sent back to the
@@ -18,13 +23,11 @@ function redact(value: string, key: string): string {
 
 export async function GET() {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('session-token')?.value;
-    if (!token) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
-    const user = await getSessionFromToken(token);
-    if (!user) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
+    const auth = await requireAuthenticated();
+    if (!auth.ok) return auth.response;
+    const { user } = auth;
 
-    const settings = getAppSettings();
+    const settings = await getAppSettings();
 
     // Non-admins never even see the existence of API keys
     const isAdmin = user.role === 'Admin';
@@ -32,10 +35,18 @@ export async function GET() {
     const settingsObj: Record<string, string> = {};
     const filteredSettings: typeof settings = [];
     for (const s of settings) {
-      if (SENSITIVE_KEYS.has(s.key) && !isAdmin) continue;
+      if (isSecretLikeSettingKey(s.key)) continue;
       const v = redact(s.value, s.key);
       settingsObj[s.key] = v;
       filteredSettings.push({ ...s, value: v });
+    }
+    if (isAdmin) {
+      const secretStore = getSecretStore();
+      for (const key of SENSITIVE_KEYS) {
+        const value = await secretStore.configured(key) ? API_KEY_MASK : '';
+        settingsObj[key] = value;
+        filteredSettings.push({ key, value });
+      }
     }
     return Response.json({ settings: filteredSettings, ...settingsObj });
   } catch {
@@ -45,32 +56,58 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('session-token')?.value;
-    if (!token) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
-    const user = await getSessionFromToken(token);
-    if (!user || (user.role !== 'Admin' && user.role !== 'Teacher'))
-      return Response.json({ error: 'Not authorized.' }, { status: 403 });
+    const auth = await requireAuthenticated({ roles: ['Admin', 'Teacher'] });
+    if (!auth.ok) return auth.response;
+    const { user } = auth;
 
-    // Non-admins cannot write API keys
     const isAdmin = user.role === 'Admin';
 
-    const body = await request.json();
-    if (body.key && body.value !== undefined) {
-      if (SENSITIVE_KEYS.has(body.key) && !isAdmin) {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return Response.json({ error: 'Settings payload must contain valid JSON.' }, { status: 400 });
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return Response.json({ error: 'Settings payload must be an object.' }, { status: 400 });
+    }
+    const settingsBody = body as Record<string, unknown>;
+    const entries: Array<[string, unknown]> =
+      typeof settingsBody.key === 'string' && settingsBody.value !== undefined
+        ? [[settingsBody.key, settingsBody.value]]
+        : Object.entries(settingsBody).filter(([key]) => key !== 'key' && key !== 'value');
+    if (entries.length < 1 || entries.length > 50) {
+      return Response.json({ error: 'Settings payload must contain between 1 and 50 entries.' }, { status: 400 });
+    }
+
+    // Validate the whole batch before writing any entry.
+    for (const [key, value] of entries) {
+      const decision = settingWriteDecision(user.role, key);
+      if (!decision.allowed) {
+        return Response.json({ error: decision.error }, { status: decision.status });
+      }
+      const valueError = validateSettingValue(key, value);
+      if (valueError) return Response.json({ error: valueError }, { status: 400 });
+      if (isSecretLikeSettingKey(key) && !SENSITIVE_KEYS.has(key)) {
+        return Response.json(
+          { error: 'Secret-like settings must use an approved encrypted secret field.' },
+          { status: 400 },
+        );
+      }
+      if (SENSITIVE_KEYS.has(key) && !isAdmin) {
         return Response.json({ error: 'Only admins can change API keys.' }, { status: 403 });
       }
+    }
+
+    for (const [key, value] of entries) {
       // Never save the mask back as the real value (user didn't change it)
-      if (SENSITIVE_KEYS.has(body.key) && String(body.value) === API_KEY_MASK) {
-        return Response.json({ success: true, noop: true });
-      }
-      updateAppSetting(body.key, String(body.value));
-    } else {
-      for (const [key, value] of Object.entries(body)) {
-        if (key === 'key' || key === 'value') continue;
-        if (SENSITIVE_KEYS.has(key) && !isAdmin) continue; // silently skip
-        if (SENSITIVE_KEYS.has(key) && String(value) === API_KEY_MASK) continue; // skip mask
-        updateAppSetting(key, String(value));
+      if (SENSITIVE_KEYS.has(key) && String(value) === API_KEY_MASK) continue;
+      if (SENSITIVE_KEYS.has(key)) {
+        const secret = String(value).trim();
+        if (secret) await getSecretStore().set(key, secret);
+        else await getSecretStore().clear(key);
+      } else {
+        await updateAppSetting(key, String(value));
       }
     }
 

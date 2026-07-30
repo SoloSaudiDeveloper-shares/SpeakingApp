@@ -21,14 +21,14 @@ export async function GET(request: Request) {
     // learner — both should see the student homework view.
     if (user.studentId) {
       const className = searchParams.get('className') ?? '';
-      const homework = getHomeworkForStudent(user.studentId, className);
+      const homework = await getHomeworkForStudent(user.studentId, className);
       return Response.json({ homework });
     }
 
     if (user.role === 'Teacher' || user.role === 'Admin') {
       const cycleId = searchParams.get('cycleId');
       if (!cycleId) return Response.json({ error: 'cycleId required.' }, { status: 400 });
-      const homework = getHomeworkForTeacher(Number(cycleId));
+      const homework = await getHomeworkForTeacher(Number(cycleId));
       return Response.json({ homework });
     }
 
@@ -66,13 +66,14 @@ export async function POST(request: Request) {
       scenarioIds,
       source,
       status,
+      pathConfig,
     } = body;
 
     if (!cycleId || !title || !dueDate) {
       return Response.json({ error: 'cycleId, title, and dueDate are required.' }, { status: 400 });
     }
 
-    const homework = createHomework({
+    const homework = await createHomework({
       cycleId,
       createdByUserId: user.id,
       title,
@@ -87,6 +88,7 @@ export async function POST(request: Request) {
       scenarioIds: scenarioIds ?? [],
       source,
       status,
+      pathConfig: pathConfig ?? null,
     });
 
     return Response.json({ homework }, { status: 201 });

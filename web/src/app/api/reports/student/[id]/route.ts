@@ -10,7 +10,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (!Number.isInteger(studentId) || studentId <= 0) {
       return Response.json({ error: 'Invalid student id.' }, { status: 400 });
     }
-    return Response.json(getStudentReport(studentId, filtersFromUrl(request)));
+    return Response.json(await getStudentReport(studentId, filtersFromUrl(request)));
   } catch (error) {
     console.error('reports student error:', error);
     return Response.json({ error: 'Internal server error.' }, { status: 500 });

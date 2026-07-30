@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1785014035481,
+      "tag": "0000_initial_postgresql",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785015163997,
+      "tag": "0001_curvy_robin_chapel",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785020529231,
+      "tag": "0002_breezy_darkstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785422804569,
+      "tag": "0003_amusing_masque",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785426922174,
+      "tag": "0004_naive_agent_brand",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785427608182,
+      "tag": "0005_cultured_malcolm_colcord",
+      "breakpoints": true
+    }
+  ]
+}

@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(await file.arrayBuffer());
     if (buffer.length === 0) return Response.json({ error: 'The selected workbook is empty.' }, { status: 400 });
     if (commit) {
-      const imported = importKlpWorkbook({
+      const imported = await importKlpWorkbook({
         buffer,
         fileName: file.name,
         name: String(form.get('name') || 'ALC Index'),

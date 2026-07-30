@@ -37,7 +37,7 @@ export async function POST(request: Request) {
   if (!template) return Response.json({ error: 'Unknown template.' }, { status: 400 });
 
   // 1. Create the book (auto-generates ListenRepeat tasks)
-  const book = importBook({
+  const book = await importBook({
     title: template.title,
     cefrLevel: template.cefrLevel,
     words: template.words,
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
   // 2. Create a 2-week cycle for it
   const start = body.startDate ?? new Date().toISOString().slice(0, 10);
   const end = body.endDate ?? new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
-  const cycle = createCycle({
+  const cycle = await createCycle({
     startDate: start,
     endDate: end,
     bookId: book.id,
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
 
   // 3. Optionally apply the template's suggested stage config as the default
   if (body.applyStageConfig !== false) {
-    setDefaultStageConfig({
+    await setDefaultStageConfig({
       sequence: template.stageSequence as never,
       unlockMode: template.unlockMode,
     });

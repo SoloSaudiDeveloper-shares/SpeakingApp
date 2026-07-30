@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { logout } from '@/lib/actions/auth-actions';
 import { NextRequest, NextResponse } from 'next/server';
+import { sessionCookieOptions } from '@/lib/auth/session-cookie';
 
 function redirectHome() {
   const response = new NextResponse(null, {
@@ -15,15 +16,16 @@ function redirectHome() {
 
 function clearAuthCookies(response: NextResponse) {
   response.cookies.set('session-token', '', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.SESSION_COOKIE_SECURE === 'true',
-    path: '/',
+    ...sessionCookieOptions(),
     maxAge: 0,
   });
   response.cookies.set('view-as', '', {
     sameSite: 'lax',
     path: '/',
+    maxAge: 0,
+  });
+  response.cookies.set('must-change-password', '', {
+    ...sessionCookieOptions(),
     maxAge: 0,
   });
 }

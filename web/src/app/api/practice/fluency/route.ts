@@ -35,7 +35,16 @@ function sanitizeMonologueRounds(rounds: RoundInput[], cefrBand: CefrBand) {
   return rounds.map((round, index) => {
     const transcript = typeof round.transcript === 'string' ? round.transcript : '';
     const actualSeconds = toNonNegativeNumber(round.actualSeconds);
-    const rawMetrics = computeFluencyMetrics({ transcript, audioDurationSeconds: actualSeconds, cefrBand });
+    const wordTimings = Array.isArray(round.wordTimings) ? round.wordTimings.flatMap((timing) => {
+      if (!timing || typeof timing !== 'object') return [];
+      const item = timing as Record<string, unknown>;
+      const word = typeof item.word === 'string' ? item.word.trim() : '';
+      const start = toNonNegativeNumber(item.start);
+      const end = toNonNegativeNumber(item.end);
+      return word && end >= start ? [{ word, start, end }] : [];
+    }) : [];
+    const scoredPauseThresholdMs = Math.max(500, Math.min(3000, toNonNegativeNumber(round.scoredPauseThresholdMs) || 1000));
+    const rawMetrics = computeFluencyMetrics({ transcript, audioDurationSeconds: actualSeconds, wordTimings, scoredPauseThresholdMs, cefrBand });
     const speechSeconds = Math.max(0, rawMetrics.audioDurationSeconds - rawMetrics.totalPauseSeconds);
     const sufficiency = monologueSufficiency(rawMetrics.wordCount, speechSeconds);
     const content = scoreContentQuality(transcript);
@@ -50,6 +59,12 @@ function sanitizeMonologueRounds(rounds: RoundInput[], cefrBand: CefrBand) {
       speechRateWpm: rawMetrics.speechRateWpm,
       articulationRateWpm: rawMetrics.articulationRateWpm,
       fluencyIndex,
+      pauseCount: rawMetrics.pauseCount,
+      pausePerMin: rawMetrics.pausePerMin,
+      totalPauseSeconds: rawMetrics.totalPauseSeconds,
+      meanLengthOfRun: rawMetrics.meanLengthOfRun,
+      scoredPauseThresholdMs,
+      wordTimings,
       serverScored: true,
       sufficiency,
       contentQuality: content,
@@ -77,6 +92,8 @@ function sanitizeShadowingRounds(rounds: RoundInput[]) {
       timingMatch,
       composite,
       weakWords: comparison.weakWords,
+      azureWords: Array.isArray(round.azureWords) ? round.azureWords : [],
+      pronunciationProvider: Array.isArray(round.azureWords) && round.azureWords.length > 0 ? 'azure' : 'basic-transcript',
       actualSeconds: studentDurationSec,
       wordCount: transcript.trim().split(/\s+/).filter(Boolean).length,
       speechRateWpm: 0,
@@ -103,15 +120,14 @@ export async function POST(request: Request) {
 
     const cycleId = toPositiveIntOrNull(body.cycleId);
     if (cycleId) {
-      const enrollment = db
+      const enrollment = ((await db
         .select()
         .from(studentCycles)
-        .where(and(eq(studentCycles.studentId, user.studentId), eq(studentCycles.cycleId, cycleId)))
-        .get();
+        .where(and(eq(studentCycles.studentId, user.studentId), eq(studentCycles.cycleId, cycleId))).limit(1))[0]);
       if (!enrollment) return Response.json({ error: 'Not enrolled in this cycle.' }, { status: 403 });
     }
 
-    const student = db.select().from(students).where(eq(students.id, user.studentId)).get();
+    const student = ((await db.select().from(students).where(eq(students.id, user.studentId)).limit(1))[0]);
     const cefrBand = coerceBand(student?.cefrBand);
     const roundInputs: RoundInput[] = Array.isArray(body.rounds)
       ? body.rounds.filter((round: unknown): round is RoundInput => !!round && typeof round === 'object' && !Array.isArray(round))
@@ -131,7 +147,7 @@ export async function POST(request: Request) {
           ? Math.round(((rounds as ReturnType<typeof sanitizeShadowingRounds>).reduce((sum, round) => sum + round.composite, 0) / rounds.length) * 1000) / 1000
           : 0);
 
-    const session = recordFluencyDrill({
+    const session = await recordFluencyDrill({
       studentId: user.studentId,
       cycleId,
       drillType: body.drillType,
@@ -156,7 +172,7 @@ export async function GET() {
     if (!user) return Response.json({ error: 'Session expired.' }, { status: 401 });
     if (!user.studentId) return Response.json({ sessions: [] });
 
-    return Response.json({ sessions: getFluencyDrillHistory(user.studentId) });
+    return Response.json({ sessions: await getFluencyDrillHistory(user.studentId) });
   } catch {
     return Response.json({ error: 'Internal server error.' }, { status: 500 });
   }

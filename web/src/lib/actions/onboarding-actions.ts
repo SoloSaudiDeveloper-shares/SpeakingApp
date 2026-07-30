@@ -48,8 +48,8 @@ export interface DiagnosticResult {
   takenAt: string;
 }
 
-export function getOnboardingState(studentId: number): { onboarded: boolean; hasDiagnostic: boolean; cefrBand: string } {
-  const s = db.select().from(students).where(eq(students.id, studentId)).get();
+export async function getOnboardingState(studentId: number): Promise<{ onboarded: boolean; hasDiagnostic: boolean; cefrBand: string }> {
+  const s = ((await db.select().from(students).where(eq(students.id, studentId)).limit(1))[0]);
   return {
     onboarded: !!s?.onboardedAt,
     hasDiagnostic: !!s?.diagnosticJson,
@@ -57,28 +57,25 @@ export function getOnboardingState(studentId: number): { onboarded: boolean; has
   };
 }
 
-export function markOnboarded(studentId: number) {
-  db.update(students)
+export async function markOnboarded(studentId: number) {
+  (await db.update(students)
     .set({ onboardedAt: new Date().toISOString() })
-    .where(eq(students.id, studentId))
-    .run();
+    .where(eq(students.id, studentId)));
 }
 
-export function resetDiagnostic(studentId: number) {
-  db.update(students)
+export async function resetDiagnostic(studentId: number) {
+  (await db.update(students)
     .set({ diagnosticJson: null, onboardedAt: null })
-    .where(eq(students.id, studentId))
-    .run();
+    .where(eq(students.id, studentId)));
 }
 
-export function saveDiagnostic(studentId: number, result: DiagnosticResult, applyCefr: boolean) {
+export async function saveDiagnostic(studentId: number, result: DiagnosticResult, applyCefr: boolean) {
   const update: Record<string, string> = { diagnostic_json: JSON.stringify(result) } as never;
-  db.update(students)
+  (await db.update(students)
     .set(applyCefr
       ? { diagnosticJson: JSON.stringify(result), cefrBand: result.suggestedCefr }
       : { diagnosticJson: JSON.stringify(result) })
-    .where(eq(students.id, studentId))
-    .run();
+    .where(eq(students.id, studentId)));
   void update;
 }
 

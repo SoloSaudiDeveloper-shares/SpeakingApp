@@ -1,4 +1,4 @@
-export type ClientSpeechReliabilityEventType = 'stt' | 'pronunciation' | 'recording';
+export type ClientSpeechReliabilityEventType = 'stt' | 'pronunciation' | 'recording' | 'tts';
 
 export function recordClientSpeechReliabilityEvent(input: {
   eventType: ClientSpeechReliabilityEventType;

@@ -15,9 +15,10 @@ export default function AppearanceSettingsPage() {
       </div>
 
       <h2 className="text-xl font-semibold text-foreground flex items-center gap-2">
-        <Volume2 size={20} /> Voice (TTS)
+        <Volume2 size={20} /> Tutor voice and accent
       </h2>
       <div className="rounded-lg border border-border bg-card p-6">
+        <p className="mb-4 text-sm text-muted-foreground">This changes the voice you hear from the tutor (text-to-speech). It does not change <strong>Groq Whisper — speech recognition</strong>, which listens to your speech.</p>
         <TtsPicker />
       </div>
     </div>

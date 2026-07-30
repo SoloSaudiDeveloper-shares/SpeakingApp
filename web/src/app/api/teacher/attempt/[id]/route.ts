@@ -1,8 +1,10 @@
-import { cookies } from 'next/headers';
-import { getSessionFromToken } from '@/lib/actions/auth-actions';
+import {
+  getAuthorizedAttempt,
+  requireAuthenticated,
+} from '@/lib/auth/authorization';
 import { overrideAttemptScore } from '@/lib/actions/teacher-actions';
 import { db } from '@/lib/db';
-import { attempts, practiceTasks, students, vocabularyItems } from '@/lib/db/schema';
+import { practiceTasks, students, vocabularyItems } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 
 export async function GET(
@@ -10,25 +12,21 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('session-token')?.value;
-    if (!token) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
-
-    const user = await getSessionFromToken(token);
-    if (!user || (user.role !== 'Admin' && user.role !== 'Teacher'))
-      return Response.json({ error: 'Not authorized.' }, { status: 403 });
+    const auth = await requireAuthenticated({ roles: ['Admin', 'Teacher'] });
+    if (!auth.ok) return auth.response;
 
     const { id } = await params;
     const attemptId = parseInt(id, 10);
     if (isNaN(attemptId)) return Response.json({ error: 'Invalid attempt ID.' }, { status: 400 });
 
-    const attempt = db.select().from(attempts).where(eq(attempts.id, attemptId)).get();
-    if (!attempt) return Response.json({ error: 'Attempt not found.' }, { status: 404 });
+    const authorized = await getAuthorizedAttempt(auth.user, attemptId);
+    if (!authorized) return Response.json({ error: 'Attempt not found.' }, { status: 404 });
+    const { attempt } = authorized;
 
-    const task = db.select().from(practiceTasks).where(eq(practiceTasks.id, attempt.practiceTaskId)).get();
-    const student = db.select().from(students).where(eq(students.id, attempt.studentId)).get();
+    const task = ((await db.select().from(practiceTasks).where(eq(practiceTasks.id, attempt.practiceTaskId)).limit(1))[0]);
+    const student = ((await db.select().from(students).where(eq(students.id, attempt.studentId)).limit(1))[0]);
     const vocab = task?.vocabularyItemId
-      ? db.select().from(vocabularyItems).where(eq(vocabularyItems.id, task.vocabularyItemId)).get()
+      ? ((await db.select().from(vocabularyItems).where(eq(vocabularyItems.id, task.vocabularyItemId)).limit(1))[0])
       : null;
 
     return Response.json({ attempt, task, student, vocabulary: vocab });
@@ -42,17 +40,15 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('session-token')?.value;
-    if (!token) return Response.json({ error: 'Not authenticated.' }, { status: 401 });
-
-    const user = await getSessionFromToken(token);
-    if (!user || (user.role !== 'Admin' && user.role !== 'Teacher'))
-      return Response.json({ error: 'Not authorized.' }, { status: 403 });
+    const auth = await requireAuthenticated({ roles: ['Admin', 'Teacher'] });
+    if (!auth.ok) return auth.response;
 
     const { id } = await params;
     const attemptId = parseInt(id, 10);
     if (isNaN(attemptId)) return Response.json({ error: 'Invalid attempt ID.' }, { status: 400 });
+    if (!await getAuthorizedAttempt(auth.user, attemptId)) {
+      return Response.json({ error: 'Attempt not found.' }, { status: 404 });
+    }
 
     const body = await request.json();
     const score = typeof body.score === 'number' ? body.score : parseFloat(body.score);
@@ -61,7 +57,7 @@ export async function POST(
     if (isNaN(score) || score < 0 || score > 1)
       return Response.json({ error: 'Score must be between 0 and 1.' }, { status: 400 });
 
-    overrideAttemptScore(attemptId, score, notes);
+    await overrideAttemptScore(attemptId, score, notes);
 
     return Response.json({ success: true });
   } catch {

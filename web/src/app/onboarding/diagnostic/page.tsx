@@ -158,8 +158,11 @@ export default function DiagnosticPage() {
 
   const playTask = async () => {
     setSpeaking(true)
-    await speak(task.text)
-    setSpeaking(false)
+    try {
+      await speak(task.text)
+    } finally {
+      setSpeaking(false)
+    }
   }
 
   const skipForSession = () => {

@@ -607,7 +607,7 @@ FROM hf.co/google/gemma-4-E4B-it-GGUF
                   </button>
                 </div>
                 <p className="mt-1 text-[0.65rem] text-muted-foreground">
-                  Get a free key at <a className="text-primary underline" href="https://console.groq.com/keys" target="_blank" rel="noreferrer">console.groq.com/keys</a>. Stored locally in the SQLite DB; never sent back to non-admin users.
+                  Get a free key at <a className="text-primary underline" href="https://console.groq.com/keys" target="_blank" rel="noreferrer">console.groq.com/keys</a>. Stored in Azure Key Vault in production (encrypted PostgreSQL storage locally); never returned to non-admin users.
                 </p>
               </div>
               <div>
@@ -654,7 +654,7 @@ FROM hf.co/google/gemma-4-E4B-it-GGUF
                   </button>
                 </div>
                 <p className="mt-1 text-[0.65rem] text-muted-foreground">
-                  Get a key at <a className="text-primary underline" href="https://x.ai/api" target="_blank" rel="noreferrer">x.ai/api</a>. Stored locally in the SQLite DB; never sent back to non-admin users.
+                  Get a key at <a className="text-primary underline" href="https://x.ai/api" target="_blank" rel="noreferrer">x.ai/api</a>. Stored in Azure Key Vault in production (encrypted PostgreSQL storage locally); never returned to non-admin users.
                 </p>
               </div>
               <div>
@@ -700,7 +700,7 @@ FROM hf.co/google/gemma-4-E4B-it-GGUF
                   </button>
                 </div>
                 <p className="mt-1 text-[0.65rem] text-muted-foreground">
-                  Get a key at <a className="text-primary underline" href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">platform.openai.com/api-keys</a>. Stored locally in the SQLite DB; never sent back to non-admin users.
+                  Get a key at <a className="text-primary underline" href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">platform.openai.com/api-keys</a>. Stored in Azure Key Vault in production (encrypted PostgreSQL storage locally); never returned to non-admin users.
                 </p>
               </div>
               <div>
@@ -757,7 +757,7 @@ FROM hf.co/google/gemma-4-E4B-it-GGUF
                     {showAzureKey ? "Hide" : "Show"}
                   </button>
                 </div>
-                <p className="mt-1 text-[0.65rem] text-muted-foreground">Stored locally in the SQLite DB; never sent back to non-admin users.</p>
+                <p className="mt-1 text-[0.65rem] text-muted-foreground">Stored in Azure Key Vault in production (encrypted PostgreSQL storage locally); never returned to non-admin users.</p>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>

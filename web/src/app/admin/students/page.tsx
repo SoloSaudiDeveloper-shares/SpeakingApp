@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { Plus, Loader2, Pencil, Trash2, KeyRound, X, Check, RotateCcw } from "lucide-react"
+import { TemporaryPasswordDialog } from "@/components/admin/temporary-password-dialog"
 
 interface Student {
   id: number
@@ -27,6 +28,8 @@ export default function AdminStudentsPage() {
   const [editData, setEditData] = useState<Partial<Student> & { password?: string }>({})
   const [bulkClass, setBulkClass] = useState<string>("")
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [formError, setFormError] = useState<string | null>(null)
+  const [passwordTarget, setPasswordTarget] = useState<Student | null>(null)
 
   const load = () => {
     Promise.all([
@@ -44,6 +47,11 @@ export default function AdminStudentsPage() {
   useEffect(load, [])
 
   const handleCreate = async () => {
+    setFormError(null)
+    if (formData.password.length < 12) {
+      setFormError("Enter a temporary password of at least 12 characters.")
+      return
+    }
     setSaving(true)
     try {
       const res = await fetch("/api/students", {
@@ -55,8 +63,13 @@ export default function AdminStudentsPage() {
         setFormData({ uniqueNumber: "", fullName: "", class: "", cefrBand: "A1", password: "" })
         setShowForm(false)
         load()
+      } else {
+        const data = await res.json().catch(() => ({}))
+        setFormError(data?.error ?? "Could not create student.")
       }
-    } catch { /* ignore */ }
+    } catch {
+      setFormError("Network error. Please try again.")
+    }
     setSaving(false)
   }
 
@@ -91,15 +104,21 @@ export default function AdminStudentsPage() {
     load()
   }
 
-  const handleResetPassword = async (id: number, uniqueNumber: string) => {
-    const newPw = prompt(`Set new password for ${uniqueNumber}:`, uniqueNumber)
-    if (!newPw) return
-    await fetch(`/api/students/${id}`, {
+  const handleResetPassword = async (student: Student, newPassword: string) => {
+    const response = await fetch(`/api/students/${student.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: newPw }),
+      body: JSON.stringify({
+        password: newPassword,
+        ...(student.isActive ? {} : { isActive: true }),
+      }),
     })
-    alert("Password updated.")
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      return data?.error ?? "Password could not be updated."
+    }
+    setPasswordTarget(null)
+    load()
   }
 
   const handleResetDiagnostic = async (id: number, name: string) => {
@@ -192,10 +211,11 @@ export default function AdminStudentsPage() {
             <select value={formData.cefrBand} onChange={(e) => setFormData({ ...formData, cefrBand: e.target.value })} className="bg-background border border-input rounded-md px-3 py-2 w-full text-sm">
               {CEFR_BANDS.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
-            <input placeholder="Password (default = number)" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} className="bg-background border border-input rounded-md px-3 py-2 w-full text-sm" />
+            <input type="password" autoComplete="new-password" placeholder="Temporary password (12+ characters)" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} className="bg-background border border-input rounded-md px-3 py-2 w-full text-sm" />
           </div>
+          {formError && <p className="text-sm text-destructive">{formError}</p>}
           <div className="flex gap-2">
-            <button onClick={handleCreate} disabled={saving || !formData.uniqueNumber || !formData.fullName} className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition disabled:opacity-50">
+            <button onClick={handleCreate} disabled={saving || !formData.uniqueNumber || !formData.fullName || formData.password.length < 12} className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 transition disabled:opacity-50">
               {saving ? "Creating..." : "Create Student"}
             </button>
             <button onClick={() => setShowForm(false)} className="rounded-md border border-border px-4 py-2 text-sm">Cancel</button>
@@ -301,7 +321,7 @@ export default function AdminStudentsPage() {
                         </>
                       ) : (
                         <>
-                          <button onClick={() => handleResetPassword(s.id, s.uniqueNumber)} className="p-1.5 rounded text-muted-foreground hover:bg-muted" title="Reset password">
+                          <button onClick={() => setPasswordTarget(s)} className="p-1.5 rounded text-muted-foreground hover:bg-muted" title={s.isActive ? "Reset password" : "Set password and activate"}>
                             <KeyRound size={14} />
                           </button>
                           <button onClick={() => handleResetDiagnostic(s.id, s.fullName)} className="p-1.5 rounded text-muted-foreground hover:bg-muted" title="Reset speaking check">
@@ -330,6 +350,19 @@ export default function AdminStudentsPage() {
       <datalist id="class-suggestions">
         {classes.map((c) => <option key={c} value={c} />)}
       </datalist>
+      {passwordTarget && (
+        <TemporaryPasswordDialog
+          title={passwordTarget.isActive ? "Reset student password" : "Secure and activate student"}
+          description={
+            passwordTarget.isActive
+              ? `Set a temporary password for ${passwordTarget.uniqueNumber}.`
+              : `${passwordTarget.uniqueNumber} is disabled. A new temporary password will secure and reactivate the login.`
+          }
+          confirmLabel={passwordTarget.isActive ? "Reset password" : "Set password and activate"}
+          onCancel={() => setPasswordTarget(null)}
+          onConfirm={(password) => handleResetPassword(passwordTarget, password)}
+        />
+      )}
     </div>
   )
 }
