@@ -201,13 +201,38 @@ Never request or accept learner names or personal email addresses for the SAIF t
 
 ### Infrastructure onboarding
 
-The current release intentionally leaves the real LRS disabled. Before adding credentials:
+The source templates fail closed with xAPI disabled until all required
+configuration is supplied. The live trial may be enabled only after the
+credential and empty-outbox checks below pass:
 
-1. Add Key Vault secrets for the LRS username and password through the reviewed Bicep deployment.
-2. Add Key Vault-backed Container App secret references; do not type the password into a plain Container App environment-value field.
-3. Supply the URL and enable flag as reviewed deployment configuration.
-4. Deploy a new immutable image/revision through GitHub Actions.
-5. Confirm readiness and app smoke tests before enabling the scheduled xAPI worker.
+1. Add Key Vault secrets for the LRS username and password through the reviewed
+   Bicep deployment or the secure interactive helper.
+2. Add Key Vault-backed Container App secret references; do not type the
+   password into a plain Container App environment-value field.
+3. Supply the URL while `XAPI_ENABLED=false`.
+4. Confirm readiness, app smoke tests, and the current outbox counts.
+5. Prove that the scoped credential passes the LRS authentication boundary with
+   a non-evidence request.
+6. Enable xAPI in a new healthy revision and run the scheduled worker once.
+
+For an Azure CLI onboarding from an administrator workstation, use
+[`scripts/keyvault-onboard-interactive.ps1`](../scripts/keyvault-onboard-interactive.ps1).
+The helper:
+
+- requests the LRS password through a hidden `Read-Host -AsSecureString` prompt;
+- never puts the password in a command argument, file, console output, or shell
+  history;
+- temporarily permits only the workstation public `/32`;
+- temporarily grants only `Key Vault Secrets Officer` at the individual vault
+  scope;
+- uses the current Azure CLI access token to write the two secrets; and
+- removes both temporary grants in `finally`, including failure paths.
+
+Run it from PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\malfa\speaking\scripts\keyvault-onboard-interactive.ps1" -VaultName speakinglab-kv-20260729 -ResourceGroup rg-speakinglab-prod-uksouth -UsernameSecretName speaking-lab-xapi-username -PasswordSecretName speaking-lab-xapi-password -UsernameValue speaking_tutor
+```
 
 The application expects:
 
@@ -232,6 +257,25 @@ Use stable Key Vault names in the infrastructure change:
 - `speaking-lab-xapi-password`
 
 The existing `speaking-lab-xapi-job-token` is an internal scheduler-to-app authentication token. It is not an LRS credential and must not be replaced with the SAIF password.
+
+### Trial deployment verification — 2026-07-30
+
+- Both LRS secret names exist in Key Vault and are enabled; values were not read
+  during verification.
+- The vault returned to `defaultAction=Deny` with zero workstation IP rules and
+  no temporary user role assignment.
+- Container App revision `speakinglab-app--0000007` is healthy and receives
+  100% of traffic.
+- `XAPI_USERNAME` and `XAPI_PASSWORD` are Container App secret references backed
+  by Key Vault, not plaintext environment values.
+- The unauthenticated LRS request returned `401`; the same harmless empty batch
+  authenticated from the app and returned `200`.
+- The PostgreSQL xAPI outbox was empty before activation and remained empty
+  after the scheduled worker execution.
+- Scheduled execution `speakinglab-xapi-ea987sq` succeeded.
+- The real signed-launch → assessed mapped KLP → LRS → SAIF ingestion → actor map
+  → mastery round trip remains a required acceptance gate. Do not describe the
+  integration as end-to-end validated until that evidence is recorded.
 
 ### SAIF validation and cutover
 
