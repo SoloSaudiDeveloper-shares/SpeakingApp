@@ -177,7 +177,9 @@ The same credential powers Azure Speech-to-text and phoneme-level pronunciation 
 
 ## SAIF LRS
 
-Do not enable the real integration until SAIF supplies sandbox/trial onboarding data and the pinned contract is reconfirmed.
+The 2026-07-20 re-issued handoff supplied a dedicated write-only LRS credential and
+the corrected `https://saif.training` identifier namespace. Do not record the
+credential value in this file or in deployment output.
 Follow the joint programmer sequence in
 [`SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md`](./SAIF_SPEAKING_LAB_CONNECTION_GUIDE.md);
 this section focuses on credential handling.
@@ -186,9 +188,9 @@ this section focuses on credential handling.
 
 Obtain all of the following through an approved secure channel:
 
-- Stable LRS statements endpoint
-- Unique Basic Auth username with `statements/write` scope
-- Basic Auth password
+- Stable LRS statements endpoint (received in the 2026-07-20 handoff)
+- Unique Basic Auth username with `statements/write` scope (received)
+- Basic Auth password (received separately; store only in Key Vault)
 - Confirmation that the actor account homepage remains `https://saif.rsaf.mil`
 - Confirmation that `speaking-lab` remains the accepted source application
 - Signed launch/SSO test inputs and the pseudonymous `sub` format
@@ -217,6 +219,12 @@ The application expects:
 | `XAPI_PASSWORD` | SAIF-issued writer password | Secret |
 | `XAPI_SOURCE_APP` | `speaking-lab` | Non-secret, pinned |
 | `XAPI_ACTOR_HOMEPAGE` | `https://saif.rsaf.mil` | Non-secret, pinned |
+
+The dedicated LRS credential supplies the definitive xAPI `authority`. The
+2026-07-20 handoff cover note says `speaking-tutor`, but Profile v1.2 in the same
+bundle lists that source-app value as reserved. Until SAIF re-issues those two
+instructions consistently, keep `XAPI_SOURCE_APP=speaking-lab` so ingestion does
+not filter the evidence.
 
 Use stable Key Vault names in the infrastructure change:
 

@@ -28,14 +28,14 @@ dropped and re-runs are idempotent. Source: `pipeline.py::process_statement` /
 `pipeline.filter_reason()` (pure; unit-testable). Failing any gate → `filtered` with the
 reason recorded.
 
-1. **Activity-IRI gate** — `object.id` **MUST** start with `https://saif.rsaf.mil/klp/`
+1. **Activity-IRI gate** — `object.id` **MUST** start with `https://saif.training/klp/`
    (`Settings.xapi_activity_iri_prefix`). Else → `activity_iri_not_klp`. This is the
    Profile §3.6 addressability gate: only KLP-addressed statements are candidate evidence.
 2. **Verb gate** — `verb.id` **MUST** be one of the five mastery-evidence verbs:
    `http://adlnet.gov/expapi/verbs/answered`, `…/passed`, `…/failed`,
-   `https://saif.rsaf.mil/verbs/practiced`, `https://saif.rsaf.mil/verbs/reviewed`.
+   `https://saif.training/verbs/practiced`, `https://saif.training/verbs/reviewed`.
    Else → `verb_not_evidence`. (`experienced`, `completed`, cmi5 lifecycle verbs → filtered.)
-3. **Source-app skip** — `context.extensions["https://saif.rsaf.mil/extensions/source-app"]`
+3. **Source-app skip** — `context.extensions["https://saif.training/extensions/source-app"]`
    **MUST NOT** be in the skip set (`Settings.xapi_skip_source_apps`, default `saif-native`).
    Else → `skip_source_app`. This is the circular-ingestion guard for SAIF's own Path-A
    emissions. **External producers must not use `saif-native` or any reserved value (Profile §9).**

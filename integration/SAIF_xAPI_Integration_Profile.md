@@ -72,7 +72,7 @@ Every statement must reference a specific KLP using the SAIF activity IRI format
 ### 3.1 IRI Pattern
 
 ```
-https://saif.rsaf.mil/klp/{department}/{concept_id}
+https://saif.training/klp/{department}/{concept_id}
 ```
 
 ### 3.2 Components
@@ -96,10 +96,10 @@ Some KLPs have subdivisions: `12-3-G-5-ii` (grammar item 5, subdivision ii). Inc
 ### 3.4 Full IRI Examples
 
 ```
-https://saif.rsaf.mil/klp/dli_alc/7-1-V-1
-https://saif.rsaf.mil/klp/dli_alc/12-3-G-5-ii
-https://saif.rsaf.mil/klp/dli_alc/9-2-F-3
-https://saif.rsaf.mil/klp/dli_alc/15-1-S-2
+https://saif.training/klp/dli_alc/7-1-V-1
+https://saif.training/klp/dli_alc/12-3-G-5-ii
+https://saif.training/klp/dli_alc/9-2-F-3
+https://saif.training/klp/dli_alc/15-1-S-2
 ```
 
 ### 3.5 Governance status
@@ -127,7 +127,7 @@ SAIF must be able to identify which cadet produced the statement. Use one of the
 ```json
 {
   "actor": {
-    "mbox": "mailto:cadet001@rsaf.mil",
+    "mbox": "mailto:cadet001@saif.training",
     "name": "Cadet Al-Ghamdi",
     "objectType": "Agent"
   }
@@ -166,8 +166,8 @@ SAIF's ingestion adapter only processes statements with the following verbs. All
 | `http://adlnet.gov/expapi/verbs/answered` | answered | Learner submitted a response to a KLP-level question or exercise |
 | `http://adlnet.gov/expapi/verbs/passed` | passed | Learner met the pass threshold on a KLP assessment |
 | `http://adlnet.gov/expapi/verbs/failed` | failed | Learner did not meet the pass threshold on a KLP assessment |
-| `https://saif.rsaf.mil/verbs/practiced` | practiced | Learner practiced a KLP in any modality (drill, exercise, activity) |
-| `https://saif.rsaf.mil/verbs/reviewed` | reviewed | Learner completed a scheduled review of a previously-seen KLP |
+| `https://saif.training/verbs/practiced` | practiced | Learner practiced a KLP in any modality (drill, exercise, activity) |
+| `https://saif.training/verbs/reviewed` | reviewed | Learner completed a scheduled review of a previously-seen KLP |
 
 ### 5.2 Non-Evidence Verbs (accepted by LRS, filtered by SAIF)
 
@@ -194,7 +194,7 @@ The minimum required fields for a statement that SAIF will process:
 ```json
 {
   "actor": {
-    "mbox": "mailto:cadet001@rsaf.mil",
+    "mbox": "mailto:cadet001@saif.training",
     "objectType": "Agent"
   },
   "verb": {
@@ -202,9 +202,9 @@ The minimum required fields for a statement that SAIF will process:
     "display": { "en-US": "answered" }
   },
   "object": {
-    "id": "https://saif.rsaf.mil/klp/dli_alc/7-1-V-1",
+    "id": "https://saif.training/klp/dli_alc/7-1-V-1",
     "definition": {
-      "type": "https://saif.rsaf.mil/activity-types/klp",
+      "type": "https://saif.training/activity-types/klp",
       "name": { "en-US": "Book 7, Lesson 1, Vocabulary 1" }
     },
     "objectType": "Activity"
@@ -225,7 +225,7 @@ Includes score, modality context, and source identification for the best mastery
 {
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "actor": {
-    "mbox": "mailto:cadet001@rsaf.mil",
+    "mbox": "mailto:cadet001@saif.training",
     "name": "Cadet Al-Ghamdi",
     "objectType": "Agent"
   },
@@ -234,9 +234,9 @@ Includes score, modality context, and source identification for the best mastery
     "display": { "en-US": "answered" }
   },
   "object": {
-    "id": "https://saif.rsaf.mil/klp/dli_alc/7-1-V-1",
+    "id": "https://saif.training/klp/dli_alc/7-1-V-1",
     "definition": {
-      "type": "https://saif.rsaf.mil/activity-types/klp",
+      "type": "https://saif.training/activity-types/klp",
       "name": { "en-US": "goodbye" },
       "description": { "en-US": "Book 7, Lesson 1, Vocabulary item 1" }
     },
@@ -253,12 +253,12 @@ Includes score, modality context, and source identification for the best mastery
   },
   "context": {
     "extensions": {
-      "https://saif.rsaf.mil/extensions/skill": "reading",
-      "https://saif.rsaf.mil/extensions/klp-type": "vocabulary",
-      "https://saif.rsaf.mil/extensions/book": 7,
-      "https://saif.rsaf.mil/extensions/lesson": 1,
-      "https://saif.rsaf.mil/extensions/department": "dli_alc",
-      "https://saif.rsaf.mil/extensions/source-app": "talentlms"
+      "https://saif.training/extensions/skill": "reading",
+      "https://saif.training/extensions/klp-type": "vocabulary",
+      "https://saif.training/extensions/book": 7,
+      "https://saif.training/extensions/lesson": 1,
+      "https://saif.training/extensions/department": "dli_alc",
+      "https://saif.training/extensions/source-app": "talentlms"
     }
   },
   "timestamp": "2026-04-27T10:30:00.000Z"
@@ -274,30 +274,30 @@ The four behavioural-signal extensions reserved in Appendix A (v1.1) carry effor
 ```json
 {
   "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
-  "actor": { "mbox": "mailto:cadet001@rsaf.mil", "objectType": "Agent" },
+  "actor": { "mbox": "mailto:cadet001@saif.training", "objectType": "Agent" },
   "verb": {
     "id": "http://adlnet.gov/expapi/verbs/answered",
     "display": { "en-US": "answered" }
   },
   "object": {
-    "id": "https://saif.rsaf.mil/klp/dli_alc/7-1-V-1",
-    "definition": { "type": "https://saif.rsaf.mil/activity-types/klp" },
+    "id": "https://saif.training/klp/dli_alc/7-1-V-1",
+    "definition": { "type": "https://saif.training/activity-types/klp" },
     "objectType": "Activity"
   },
   "result": {
     "success": false,
     "score": { "scaled": 0.0, "raw": 0, "max": 100, "min": 0 },
     "extensions": {
-      "https://saif.rsaf.mil/extensions/confidence-rating": 2,
-      "https://saif.rsaf.mil/extensions/hint-usage-count": 1,
-      "https://saif.rsaf.mil/extensions/retry-count": 0,
-      "https://saif.rsaf.mil/extensions/distractor-selected": "https://saif.rsaf.mil/klp/dli_alc/7-1-V-4"
+      "https://saif.training/extensions/confidence-rating": 2,
+      "https://saif.training/extensions/hint-usage-count": 1,
+      "https://saif.training/extensions/retry-count": 0,
+      "https://saif.training/extensions/distractor-selected": "https://saif.training/klp/dli_alc/7-1-V-4"
     }
   },
   "context": {
     "extensions": {
-      "https://saif.rsaf.mil/extensions/skill": "reading",
-      "https://saif.rsaf.mil/extensions/source-app": "talentlms"
+      "https://saif.training/extensions/skill": "reading",
+      "https://saif.training/extensions/source-app": "talentlms"
     }
   },
   "timestamp": "2026-06-21T09:15:00.000Z"
@@ -314,7 +314,7 @@ The four behavioural-signal extensions reserved in Appendix A (v1.1) carry effor
 | `actor.mbox` or `actor.account` | **Required** | Learner identity | Statement rejected (unresolved actor) |
 | `verb.id` | **Required** | Must be a mastery evidence verb (§5.1) | Statement filtered |
 | `object.id` | **Required** | Must match SAIF KLP IRI pattern (§3) | Statement filtered |
-| `object.definition.type` | Recommended | Should be `https://saif.rsaf.mil/activity-types/klp` | Accepted but lower confidence |
+| `object.definition.type` | Recommended | Should be `https://saif.training/activity-types/klp` | Accepted but lower confidence |
 | `result.success` | **Required** | `true` or `false` | Statement processed with quality 0 (worst case) |
 | `result.score.scaled` | Recommended | 0.0–1.0 performance score | Quality mapping uses conservative defaults |
 | `context.extensions.../skill` | Recommended | Modality of evidence: `reading`, `writing`, `listening`, or `speaking` | Defaults to `reading`; modality is recorded as audit metadata only |
@@ -336,7 +336,7 @@ Each Assignable Unit (AU) must map to one or more KLPs. The `cmi5.xml` manifest 
 ```xml
 <au id="klp-7-1-V-1" 
     url="https://your-content.example.com/exercises/book7-lesson1-vocab1"
-    activityType="https://saif.rsaf.mil/activity-types/klp"
+    activityType="https://saif.training/activity-types/klp"
     moveOn="Passed">
   <title>
     <langstring lang="en-US">Book 7, Lesson 1, Vocabulary 1: goodbye</langstring>
@@ -398,7 +398,7 @@ Every statement from an external system **must** include a source identifier in 
 ```json
 "context": {
   "extensions": {
-    "https://saif.rsaf.mil/extensions/source-app": "your-system-name"
+    "https://saif.training/extensions/source-app": "your-system-name"
   }
 }
 ```
@@ -442,7 +442,7 @@ Always include the `X-Experience-API-Version: 1.0.3` header. The LRS will reject
 Before submitting your first production statements, verify:
 
 - [ ] Actor `mbox` or `account` matches the mapping file provided to the SAIF administrator
-- [ ] Activity IRI follows the pattern `https://saif.rsaf.mil/klp/dli_alc/{concept_id}`
+- [ ] Activity IRI follows the pattern `https://saif.training/klp/dli_alc/{concept_id}`
 - [ ] ConceptIDs used exist in the SAIF KLP corpus (request the KLP Index for verification)
 - [ ] Verb IRI is one of the five mastery evidence verbs (§5.1)
 - [ ] `result.success` is present as `true` or `false`
@@ -487,7 +487,7 @@ A TalentLMS course includes a vocabulary quiz for Book 9, Lesson 2. The quiz has
 {
   "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "actor": {
-    "mbox": "mailto:cadet.alghamdi@rsaf.mil",
+    "mbox": "mailto:cadet.alghamdi@saif.training",
     "name": "Cadet Al-Ghamdi",
     "objectType": "Agent"
   },
@@ -496,9 +496,9 @@ A TalentLMS course includes a vocabulary quiz for Book 9, Lesson 2. The quiz has
     "display": { "en-US": "answered" }
   },
   "object": {
-    "id": "https://saif.rsaf.mil/klp/dli_alc/9-2-V-3",
+    "id": "https://saif.training/klp/dli_alc/9-2-V-3",
     "definition": {
-      "type": "https://saif.rsaf.mil/activity-types/klp",
+      "type": "https://saif.training/activity-types/klp",
       "name": { "en-US": "emergency" },
       "description": { "en-US": "Book 9, Lesson 2, Vocabulary: emergency" }
     },
@@ -512,12 +512,12 @@ A TalentLMS course includes a vocabulary quiz for Book 9, Lesson 2. The quiz has
   },
   "context": {
     "extensions": {
-      "https://saif.rsaf.mil/extensions/skill": "reading",
-      "https://saif.rsaf.mil/extensions/klp-type": "vocabulary",
-      "https://saif.rsaf.mil/extensions/book": 9,
-      "https://saif.rsaf.mil/extensions/lesson": 2,
-      "https://saif.rsaf.mil/extensions/department": "dli_alc",
-      "https://saif.rsaf.mil/extensions/source-app": "talentlms"
+      "https://saif.training/extensions/skill": "reading",
+      "https://saif.training/extensions/klp-type": "vocabulary",
+      "https://saif.training/extensions/book": 9,
+      "https://saif.training/extensions/lesson": 2,
+      "https://saif.training/extensions/department": "dli_alc",
+      "https://saif.training/extensions/source-app": "talentlms"
     }
   },
   "timestamp": "2026-04-27T09:15:30.000Z"
@@ -526,9 +526,9 @@ A TalentLMS course includes a vocabulary quiz for Book 9, Lesson 2. The quiz has
 
 **What SAIF does with this statement:**
 
-1. **FILTER** — Verb is `answered` (accepted). Activity IRI matches `https://saif.rsaf.mil/klp/**` (accepted). Source-app is `talentlms` (not a reserved SAIF-internal value, accepted).
+1. **FILTER** — Verb is `answered` (accepted). Activity IRI matches `https://saif.training/klp/**` (accepted). Source-app is `talentlms` (not a reserved SAIF-internal value, accepted).
 2. **DEDUP** — Statement ID `f47ac10b...` not in processed table. Proceed.
-3. **TRANSFORM** — Actor `cadet.alghamdi@rsaf.mil` resolved to SAIF user `uuid-1234`. KLP `9-2-V-3` found in corpus. Score `0.8` + `success: true` → SM-2 quality **4**. Modality from `skill` extension: `reading`.
+3. **TRANSFORM** — Actor `cadet.alghamdi@saif.training` resolved to SAIF user `uuid-1234`. KLP `9-2-V-3` found in corpus. Score `0.8` + `success: true` → SM-2 quality **4**. Modality from `skill` extension: `reading`.
 4. **WRITE** — A practice attempt is recorded against (user `uuid-1234`, KLP `9-2-V-3`) with `modality='reading'`, `quality=4`, `source='talentlms'`. The unified mastery row for that (user, KLP) pair is upserted: SM-2 fields recalculate from the attempt sequence and the next review date is updated. No separate per-modality mastery row is created.
 
 The learner's dashboard now shows this KLP as practised, with the reading-modality contribution visible in the modality drill-down on the mastery radar. The instructor's cohort view reflects the updated mastery state.
@@ -539,19 +539,19 @@ The learner's dashboard now shows this KLP as practised, with the reading-modali
 
 | Extension IRI | Type | Values | Notes |
 |---|---|---|---|
-| `https://saif.rsaf.mil/extensions/skill` | Context | `reading`, `writing`, `listening`, `speaking` | Modality of evidence; recorded as audit metadata on the attempt under unified mastery |
-| `https://saif.rsaf.mil/extensions/klp-type` | Context | `vocabulary`, `grammar`, `functions`, `skills` | Type of KLP; redundant with the IRI type code but useful for indexing |
-| `https://saif.rsaf.mil/extensions/book` | Context | Integer (1–34) | Source book |
-| `https://saif.rsaf.mil/extensions/lesson` | Context | Integer (1–N) | Source lesson |
-| `https://saif.rsaf.mil/extensions/department` | Context | String: `dli_alc` (others TBD) | Currently `dli_alc` only |
-| `https://saif.rsaf.mil/extensions/source-app` | Context | String: your system identifier | Must not collide with reserved SAIF-internal values (§9) |
-| `https://saif.rsaf.mil/extensions/confidence-rating` | Result | Integer 1–4: `1`=FORGOT, `2`=TOUGH, `3`=SOLID, `4`=MASTERED | **v1.1.** Learner's pre-submission self-reported confidence, aligned to SAIF's native `ConfidenceRating` scale; paired with the outcome it reproduces the composite SM-2 quality. Captured as attempt audit metadata; never gates the mastery write. Optional. |
-| `https://saif.rsaf.mil/extensions/hint-usage-count` | Result | Integer ≥ 0 | **v1.1.** Number of hints or scaffolds the learner consumed on the item. Effort/scaffolding signal for Tier-2/3 analytics. Optional. |
-| `https://saif.rsaf.mil/extensions/retry-count` | Result | Integer ≥ 0 | **v1.1.** Number of retries on the item before the recorded outcome. Effort/persistence signal. Optional. |
-| `https://saif.rsaf.mil/extensions/distractor-selected` | Result | String — identifier or text of the distractor chosen on an incorrect response | **v1.1.** Confusion signal (which distractor was picked). SAIF-native may emit the distractor's owning KLP IRI to link to distractor tagging (Stage 5.7.7); external sources may emit the option id or text. Present only on incorrect attempts. Optional. |
-| `https://saif.rsaf.mil/extensions/choice-breadth` | Result | Integer ≥ 0 | **v1.2.** Per-KLP **effective-distractor count** — the number of genuinely confusable decoys *this KLP alone* rules out (**excludes the correct target; NOT the candidate count**). Carried per KLP on `answered` statements in the per-KLP fan-out (`object.id` = the KLP IRI). **The producer sends the raw count only; SAIF owns count → weight** — maps to the BKT guess parameter (`guess ≈ 1/N_effective`, per `SAIF_Mastery_Evidence_Weighting_Alignment.md`), so every external producer is weighed identically and none bakes its own scale. **Non-gating**; the "no genuine choice" case (breadth < 2) is filtered producer-side via the `experienced` verb (the adapter's verb gate), so the adapter only ever sees breadth ≥ 2 here. Pairs with `distractor-selected`. Signed off with Tac Comms 2026-07-04 (all four decisions Option A). Optional. |
-| `https://saif.rsaf.mil/extensions/sm2-quality` | Result | Integer (0–5) — SAIF-native only | Not for external use |
-| `https://saif.rsaf.mil/extensions/response-time-ms` | Result | Integer — milliseconds | Optional |
+| `https://saif.training/extensions/skill` | Context | `reading`, `writing`, `listening`, `speaking` | Modality of evidence; recorded as audit metadata on the attempt under unified mastery |
+| `https://saif.training/extensions/klp-type` | Context | `vocabulary`, `grammar`, `functions`, `skills` | Type of KLP; redundant with the IRI type code but useful for indexing |
+| `https://saif.training/extensions/book` | Context | Integer (1–34) | Source book |
+| `https://saif.training/extensions/lesson` | Context | Integer (1–N) | Source lesson |
+| `https://saif.training/extensions/department` | Context | String: `dli_alc` (others TBD) | Currently `dli_alc` only |
+| `https://saif.training/extensions/source-app` | Context | String: your system identifier | Must not collide with reserved SAIF-internal values (§9) |
+| `https://saif.training/extensions/confidence-rating` | Result | Integer 1–4: `1`=FORGOT, `2`=TOUGH, `3`=SOLID, `4`=MASTERED | **v1.1.** Learner's pre-submission self-reported confidence, aligned to SAIF's native `ConfidenceRating` scale; paired with the outcome it reproduces the composite SM-2 quality. Captured as attempt audit metadata; never gates the mastery write. Optional. |
+| `https://saif.training/extensions/hint-usage-count` | Result | Integer ≥ 0 | **v1.1.** Number of hints or scaffolds the learner consumed on the item. Effort/scaffolding signal for Tier-2/3 analytics. Optional. |
+| `https://saif.training/extensions/retry-count` | Result | Integer ≥ 0 | **v1.1.** Number of retries on the item before the recorded outcome. Effort/persistence signal. Optional. |
+| `https://saif.training/extensions/distractor-selected` | Result | String — identifier or text of the distractor chosen on an incorrect response | **v1.1.** Confusion signal (which distractor was picked). SAIF-native may emit the distractor's owning KLP IRI to link to distractor tagging (Stage 5.7.7); external sources may emit the option id or text. Present only on incorrect attempts. Optional. |
+| `https://saif.training/extensions/choice-breadth` | Result | Integer ≥ 0 | **v1.2.** Per-KLP **effective-distractor count** — the number of genuinely confusable decoys *this KLP alone* rules out (**excludes the correct target; NOT the candidate count**). Carried per KLP on `answered` statements in the per-KLP fan-out (`object.id` = the KLP IRI). **The producer sends the raw count only; SAIF owns count → weight** — maps to the BKT guess parameter (`guess ≈ 1/N_effective`, per `SAIF_Mastery_Evidence_Weighting_Alignment.md`), so every external producer is weighed identically and none bakes its own scale. **Non-gating**; the "no genuine choice" case (breadth < 2) is filtered producer-side via the `experienced` verb (the adapter's verb gate), so the adapter only ever sees breadth ≥ 2 here. Pairs with `distractor-selected`. Signed off with Tac Comms 2026-07-04 (all four decisions Option A). Optional. |
+| `https://saif.training/extensions/sm2-quality` | Result | Integer (0–5) — SAIF-native only | Not for external use |
+| `https://saif.training/extensions/response-time-ms` | Result | Integer — milliseconds | Optional |
 
 ---
 
@@ -565,9 +565,9 @@ API Version:      X-Experience-API-Version: 1.0.3
 Method:           POST
 Content-Type:     application/json
 
-Activity IRI:     https://saif.rsaf.mil/klp/dli_alc/{book}-{lesson}-{type}-{seq}
+Activity IRI:     https://saif.training/klp/dli_alc/{book}-{lesson}-{type}-{seq}
                   (provisional; pending KLP IRI governance — see §3.5)
-Activity Type:    https://saif.rsaf.mil/activity-types/klp
+Activity Type:    https://saif.training/activity-types/klp
 
 Accepted Verbs:   answered | passed | failed | practiced | reviewed
 Required Fields:  actor (mbox or account), verb, object.id, result.success

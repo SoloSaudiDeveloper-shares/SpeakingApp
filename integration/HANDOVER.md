@@ -1,4 +1,53 @@
-# SAIF → Speaking Tutor — xAPI integration handover (starter, 2026-07-05)
+# SAIF → Speaking Tutor — xAPI integration handover
+
+> ## 🔑 YOUR LRS CREDENTIAL (2026-07-20)
+>
+> You now have **your own credential** rather than a shared one. Two things follow:
+>
+> | | |
+> |---|---|
+> | **Endpoint** | `https://saif-lrs.calmhill-682959c0.eastus2.azurecontainerapps.io/xAPI/statements` |
+> | **Username** | `speaking_tutor` |
+> | **Password** | sent to you separately — never in this file or any repo |
+> | **Scope** | `statements/write` only |
+>
+> **Why write-only.** You POST your own evidence; you do not read other producers'
+> statements out of the LRS. If you need to verify a statement landed, ask SAIF —
+> the admin ingestion status reports per-outcome counts.
+>
+> **Why your own credential matters to you.** The LRS stamps each statement's
+> `authority` from the credential it was posted with, and SAIF now stores that as
+> the definitive record of who sent it. `context.extensions/source-app` (still send
+> it as `speaking-tutor`) is a self-declared label; `authority` is proof. If the two
+> disagree, SAIF trusts `authority`.
+>
+> _SAIF side: the password lives in Key Vault as `RALPH-PASSWORD-SPEAKING-TUTOR`._
+
+
+> ## ⚠ RE-ISSUE 2026-07-20 — BREAKING CHANGE to the identifier namespace
+>
+> **If you have already built against the 2026-07-05 drop, this changes your emission and you must act.** Please re-sync from this bundle before the next integration test.
+>
+> **What changed.** Every SAIF-owned identifier moves from the `saif.rsaf.mil` namespace to **`saif.training`**. Nothing else about the contract changes — the shapes, gates, verbs and required fields are unchanged.
+>
+> | | Was | Now |
+> |---|---|---|
+> | KLP activity IRI prefix | `https://saif.rsaf.mil/klp/` | **`https://saif.training/klp/`** |
+> | KLP activity type | `https://saif.rsaf.mil/activity-types/klp` | **`https://saif.training/activity-types/klp`** |
+> | Extensions | `https://saif.rsaf.mil/extensions/…` | **`https://saif.training/extensions/…`** |
+> | SAIF-defined verbs | `https://saif.rsaf/verbs/…` | **`https://saif.training/verbs/…`** |
+>
+> (ADL-standard verbs such as `http://adlnet.gov/expapi/verbs/answered` are unaffected — only SAIF-owned identifiers move.)
+>
+> **Why it matters to you, concretely.** SAIF's §3.6 addressability gate matches on the KLP activity-IRI prefix. A statement carrying the old prefix is **not an error and not rejected at POST** — it is accepted by the LRS and then lands as `filtered` during ingestion, so **it will never reach mastery**. The failure is silent from your side: you will see 204s and no evidence appearing. Please treat this as a required change, not a cosmetic one.
+>
+> **What you need to do:** update the namespace in whatever builds your `object.id`, activity `definition.type`, and any SAIF extension keys. If those are configuration rather than hardcoded, it is a one-line change.
+>
+> **Sanity check after the change:** post one statement and confirm it lands `applied` rather than `filtered` — SAIF's admin ingestion status surfaces the per-outcome counts, and we can confirm from our side on request.
+>
+> Sorry for the churn. SAIF identifiers are now namespaced solely under `saif.training`; the previous namespace is retired and will not return.
+
+_Original drop: 2026-07-05. Re-issued 2026-07-20 with refreshed contract snapshots (see §1)._
 
 This is the **starting drop** for the external Speaking Tutor dev: what SAIF needs from your
 xAPI emission so ingested speaking evidence becomes cadet mastery. The Speaking Tutor is an
@@ -16,8 +65,10 @@ Two pinned copies sit **beside this file** so this is a self-contained drop:
 
 | File (here) | Canonical SAIF source | Version | Snapshot |
 |---|---|---|---|
-| `SAIF_xAPI_Integration_Profile.md` | `docs/spec docs/SAIF_xAPI_Integration_Profile.md` | **v1.2** | `claude/stoic-perlman-37beca` @ `908f4e6`, 2026-07-05 |
+| `SAIF_xAPI_Integration_Profile.md` | `docs/spec docs/SAIF_xAPI_Integration_Profile.md` | **v1.2** | `main` @ `6dc58fb`, **2026-07-20 (re-issue)** |
 | `SAIF_xAPI_Ingestion_Contract_v1.md` | `docs/spec docs/SAIF_xAPI_Ingestion_Contract_v1.md` | v1 (FILTER/TRANSFORM/WRITE gates + verify loop) | same |
+
+_Superseded snapshot: `claude/stoic-perlman-37beca` @ `908f4e6`, 2026-07-05 — **do not build against it**, it carries the retired `saif.rsaf.mil` namespace (see the re-issue notice above)._
 
 ⚠ **These are point-in-time snapshots, and they will move.** The profile is expected to gain new
 **rich extensions** as we settle Q3 (§4) — so treat these as a starting pin and **re-sync against the

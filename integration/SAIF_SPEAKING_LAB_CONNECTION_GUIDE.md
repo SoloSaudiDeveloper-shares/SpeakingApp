@@ -9,7 +9,7 @@ It does not replace the pinned contracts:
 - [`HANDOVER.md`](./HANDOVER.md)
 - [`SAIF_xAPI_Integration_Profile.md`](./SAIF_xAPI_Integration_Profile.md), Profile v1.2
 - [`SAIF_xAPI_Ingestion_Contract_v1.md`](./SAIF_xAPI_Ingestion_Contract_v1.md)
-- [`DEPLOYMENT_DB_IDENTITY_NOTES 1.md`](./DEPLOYMENT_DB_IDENTITY_NOTES%201.md)
+- [`DEPLOYMENT_DB_IDENTITY_NOTES.md`](./DEPLOYMENT_DB_IDENTITY_NOTES.md)
 
 If this guide conflicts with a pinned contract, stop and resolve the difference
 with both teams before enabling the integration.
@@ -24,11 +24,20 @@ with both teams before enabling the integration.
 | Actor IFI | Speaking Lab emits an account IFI whose `homePage` is `https://saif.rsaf.mil` and whose `name` is the same signed `sub`. | Profile §4 plus the Q1 implementation below |
 | KLP evidence | Emit one statement for each explicitly assessed KLP result. Do not spread an aggregate score across undeclared KLPs. | Profile §§3 and 6; Handover §2 |
 | Evidence verbs | Speaking Lab uses `answered`, `reviewed`, and `practiced` in the cases described below. | Profile §5.1 |
-| Source application | Speaking Lab sends `speaking-lab`. It must not send the reserved `speaking-tutor` or a `saif-*` value. | Profile §9 and the ingestion source gate |
+| Identifier namespace | KLP objects, SAIF-defined verbs, activity types, and extension keys use `https://saif.training`. The retired `saif.rsaf.mil` xAPI namespace is filtered from mastery. | 2026-07-20 re-issue; Profile §§3, 5, 6 and 9 |
+| Source application | Speaking Lab sends `speaking-lab`. The dedicated LRS credential stamps the authoritative `authority`; the self-declared source remains non-reserved. | Profile §9 and the ingestion source gate |
 | LRS transport | POST JSON statement arrays with Basic Auth and `X-Experience-API-Version: 1.0.3`. | Profile §2 and ingestion contract emitter reference |
 | Ingestion | SAIF polls the LRS, resolves the actor, filters evidence, and writes mastery with `source="lrs_ingestion"`. | Ingestion contract |
 
 ## 2. Decisions that still require SAIF sign-off
+
+The 2026-07-20 handoff gives the operational LRS endpoint and a dedicated,
+write-only credential. It also says `speaking-tutor` in its cover note, while the
+Profile in the same bundle reserves that value and the ingestion contract filters
+reserved source applications. Speaking Lab therefore keeps the non-reserved
+`speaking-lab` source label; the credential-stamped `authority` is the definitive
+producer identity. If SAIF wants a different source label, it must re-issue a
+consistent Profile and ingestion contract before cutover.
 
 The supplied documents intentionally left Q1, Q2, and Q3 open. Speaking Lab has
 implemented a secure pilot proposal for Q1, but SAIF must approve it before the
@@ -43,7 +52,7 @@ flags are enabled:
    context-only mappings remain suppressed.
 3. **Q3 rich signals:** pronunciation, phoneme, fluency, pace, pause, and
    scenario signals remain a proposal in
-   [`SPEAKING_SIGNAL_Q3_PROPOSAL.md`](./SPEAKING_SIGNAL_Q3_PROPOSAL.md).
+   [`SPEAKING_RICH_SIGNAL_Q3_PROPOSAL.md`](./SPEAKING_RICH_SIGNAL_Q3_PROPOSAL.md).
    Speaking Lab emits Profile v1.2 core fields only until SAIF publishes the
    extension IRIs.
 
@@ -246,9 +255,9 @@ A Speaking Lab core statement has this shape:
   },
   "object": {
     "objectType": "Activity",
-    "id": "https://saif.rsaf.mil/klp/dli_alc/APPROVED_CONCEPT_ID",
+    "id": "https://saif.training/klp/dli_alc/APPROVED_CONCEPT_ID",
     "definition": {
-      "type": "https://saif.rsaf.mil/activity-types/klp"
+      "type": "https://saif.training/activity-types/klp"
     }
   },
   "result": {
@@ -257,8 +266,8 @@ A Speaking Lab core statement has this shape:
   },
   "context": {
     "extensions": {
-      "https://saif.rsaf.mil/extensions/skill": "speaking",
-      "https://saif.rsaf.mil/extensions/source-app": "speaking-lab"
+      "https://saif.training/extensions/skill": "speaking",
+      "https://saif.training/extensions/source-app": "speaking-lab"
     }
   },
   "timestamp": "2026-07-30T00:00:00.000Z"
@@ -345,6 +354,7 @@ sandbox and its pinned ingestion contract before use.
 - [ ] Q2 concept IDs came from SAIF and multi-KLP fan-out is justified.
 - [ ] Unassessed, context-only, aggregate, and unknown-KLP evidence is suppressed.
 - [ ] `source-app` is exactly `speaking-lab`.
+- [ ] Every SAIF-owned xAPI IRI uses `https://saif.training`, never the retired namespace.
 - [ ] LRS credentials have only the required write scope and live in Key Vault.
 - [ ] Logs, HTTP errors, reports, builds, images, and workflow artifacts contain no secrets.
 - [ ] LRS POST → ingestion → actor map → mastery succeeds in sandbox.

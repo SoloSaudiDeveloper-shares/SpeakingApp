@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { hashSessionToken } from '@/lib/actions/auth-actions';
 import { decryptLocalSecret, encryptLocalSecret } from '@/lib/secrets/secret-store';
-import { getXapiConfig } from '@/lib/integrations/xapi';
+import { getXapiConfig, normalizeSaifStatementNamespace } from '@/lib/integrations/xapi';
 import { createStudent, updateAppSetting, updateStudent } from '@/lib/actions/admin-actions';
 import { register } from '@/lib/actions/auth-actions';
 import { MIN_PASSWORD_LENGTH, verifyPassword } from '@/lib/utils/password';
@@ -30,6 +30,42 @@ describe('credential boundaries', () => {
     expect(getXapiConfig().configured).toBe(false);
     expect(getXapiConfig().configurationError).toContain('reserved');
     process.env.XAPI_SOURCE_APP = 'speaking-lab';
+  });
+
+  test('upgrades retired SAIF statement IRIs without changing the actor IFI', () => {
+    const normalized = normalizeSaifStatementNamespace({
+      actor: {
+        account: {
+          homePage: 'https://saif.rsaf.mil',
+          name: 'pseudonymous-learner',
+        },
+      },
+      verb: { id: 'https://saif.rsaf.mil/verbs/practiced' },
+      object: {
+        id: 'https://saif.rsaf.mil/klp/dli_alc/fixture',
+        definition: { type: 'https://saif.rsaf.mil/activity-types/klp' },
+      },
+      context: {
+        extensions: {
+          'https://saif.rsaf.mil/extensions/skill': 'speaking',
+          'https://saif.rsaf.mil/extensions/source-app': 'speaking-lab',
+        },
+      },
+    }) as {
+      actor: { account: { homePage: string } };
+      verb: { id: string };
+      object: { id: string; definition: { type: string } };
+      context: { extensions: Record<string, string> };
+    };
+
+    expect(normalized.actor.account.homePage).toBe('https://saif.rsaf.mil');
+    expect(normalized.verb.id).toBe('https://saif.training/verbs/practiced');
+    expect(normalized.object.id).toBe('https://saif.training/klp/dli_alc/fixture');
+    expect(normalized.object.definition.type).toBe('https://saif.training/activity-types/klp');
+    expect(normalized.context.extensions).toEqual({
+      'https://saif.training/extensions/skill': 'speaking',
+      'https://saif.training/extensions/source-app': 'speaking-lab',
+    });
   });
 
   test('all local account-creation and reset paths reject weak passwords', async () => {

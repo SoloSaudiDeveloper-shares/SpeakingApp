@@ -109,6 +109,11 @@ transactionally and delivered asynchronously in batches of at most 100 with xAPI
 version `1.0.3`. Learner requests do not wait for the LRS. Failed deliveries use
 exponential retry and remain visible to admins.
 
+The 2026-07-20 SAIF re-issue moved every SAIF-owned xAPI identifier to
+`https://saif.training`. This applies to KLP activity IRIs, activity types,
+SAIF-defined verbs, and extension keys. `XAPI_ACTOR_HOMEPAGE` is a separate,
+configurable Q1 identity choice and is not rewritten as an xAPI namespace.
+
 The SAIF actor is deliberately pseudonymous and is identical for direct-login and
 SAIF-launched activity after account linking:
 
@@ -131,5 +136,5 @@ GET  /api/admin/integrations/xapi/actor-map
 ```
 
 The initial implementation emits only Profile v1.2 core fields. Proposed rich speech
-signals are recorded in `integration/SPEAKING_SIGNAL_Q3_PROPOSAL.md` and remain local
+signals are recorded in `integration/SPEAKING_RICH_SIGNAL_Q3_PROPOSAL.md` and remain local
 until SAIF publishes extension IRIs.

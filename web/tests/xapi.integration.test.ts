@@ -107,10 +107,10 @@ describe.sequential('PostgreSQL xAPI outbox', () => {
     };
     expect(statement.actor.account).toEqual({ homePage: 'https://saif.rsaf.mil', name: subject });
     expect(statement.verb.id).toBe('http://adlnet.gov/expapi/verbs/answered');
-    expect(statement.object.id).toBe(`https://saif.rsaf.mil/klp/dli_alc/KLP-${suffix}`);
+    expect(statement.object.id).toBe(`https://saif.training/klp/dli_alc/KLP-${suffix}`);
     expect(statement.result).toEqual({ success: true, score: { scaled: 0.83 } });
-    expect(statement.context.extensions['https://saif.rsaf.mil/extensions/skill']).toBe('speaking');
-    expect(statement.context.extensions['https://saif.rsaf.mil/extensions/source-app']).toBe('speaking-lab');
+    expect(statement.context.extensions['https://saif.training/extensions/skill']).toBe('speaking');
+    expect(statement.context.extensions['https://saif.training/extensions/source-app']).toBe('speaking-lab');
   });
 
   test('suppresses unassessed and context-only evidence', async () => {

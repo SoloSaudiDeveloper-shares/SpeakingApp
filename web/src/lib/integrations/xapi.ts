@@ -3,10 +3,12 @@ import { pool } from '@/lib/db';
 
 export type XapiEvidenceKind = 'answered' | 'reviewed' | 'practiced';
 
+const SAIF_XAPI_NAMESPACE = 'https://saif.training';
+const LEGACY_SAIF_XAPI_NAMESPACE = 'https://saif.rsaf.mil';
 const VERBS: Record<XapiEvidenceKind, { id: string; display: string }> = {
   answered: { id: 'http://adlnet.gov/expapi/verbs/answered', display: 'answered' },
-  reviewed: { id: 'https://saif.rsaf.mil/verbs/reviewed', display: 'reviewed' },
-  practiced: { id: 'https://saif.rsaf.mil/verbs/practiced', display: 'practiced' },
+  reviewed: { id: `${SAIF_XAPI_NAMESPACE}/verbs/reviewed`, display: 'reviewed' },
+  practiced: { id: `${SAIF_XAPI_NAMESPACE}/verbs/practiced`, display: 'practiced' },
 };
 const MAX_BATCH = 100;
 const MAX_ATTEMPTS = 10;
@@ -86,13 +88,13 @@ export async function enqueueXapiForKlpResult(attemptKlpResultId: number, kind: 
     verb: { id: verb.id, display: { 'en-US': verb.display } },
     object: {
       objectType: 'Activity',
-      id: `https://saif.rsaf.mil/klp/dli_alc/${encodeURIComponent(row.conceptId)}`,
-      definition: { type: 'https://saif.rsaf.mil/activity-types/klp' },
+      id: `${SAIF_XAPI_NAMESPACE}/klp/dli_alc/${encodeURIComponent(row.conceptId)}`,
+      definition: { type: `${SAIF_XAPI_NAMESPACE}/activity-types/klp` },
     },
     result: { success: Boolean(row.passed), score: { scaled } },
     context: { extensions: {
-      'https://saif.rsaf.mil/extensions/skill': 'speaking',
-      'https://saif.rsaf.mil/extensions/source-app': config.sourceApp,
+      [`${SAIF_XAPI_NAMESPACE}/extensions/skill`]: 'speaking',
+      [`${SAIF_XAPI_NAMESPACE}/extensions/source-app`]: config.sourceApp,
     } },
     timestamp: row.createdAt,
   };
@@ -107,6 +109,47 @@ export async function enqueueXapiForKlpResult(attemptKlpResultId: number, kind: 
 }
 
 type ClaimedRow = { id: number; statementJson: unknown; attempts: number };
+
+export function normalizeSaifStatementNamespace(statement: unknown): unknown {
+  if (!statement || typeof statement !== 'object' || Array.isArray(statement)) return statement;
+  const normalized = structuredClone(statement) as {
+    verb?: { id?: unknown };
+    object?: { id?: unknown; definition?: { type?: unknown } };
+    context?: { extensions?: unknown };
+  };
+  const migrateIri = (value: unknown, segment: string) =>
+    typeof value === 'string' && value.startsWith(`${LEGACY_SAIF_XAPI_NAMESPACE}/${segment}/`)
+      ? `${SAIF_XAPI_NAMESPACE}${value.slice(LEGACY_SAIF_XAPI_NAMESPACE.length)}`
+      : value;
+
+  if (normalized.verb) {
+    normalized.verb.id = migrateIri(normalized.verb.id, 'verbs');
+  }
+  if (normalized.object) {
+    normalized.object.id = migrateIri(normalized.object.id, 'klp');
+    if (normalized.object.definition) {
+      normalized.object.definition.type = migrateIri(
+        normalized.object.definition.type,
+        'activity-types',
+      );
+    }
+  }
+  if (
+    normalized.context?.extensions
+    && typeof normalized.context.extensions === 'object'
+    && !Array.isArray(normalized.context.extensions)
+  ) {
+    normalized.context.extensions = Object.fromEntries(
+      Object.entries(normalized.context.extensions).map(([key, value]) => [
+        key.startsWith(`${LEGACY_SAIF_XAPI_NAMESPACE}/extensions/`)
+          ? `${SAIF_XAPI_NAMESPACE}${key.slice(LEGACY_SAIF_XAPI_NAMESPACE.length)}`
+          : key,
+        value,
+      ]),
+    );
+  }
+  return normalized;
+}
 
 async function claimBatch(includeFailed: boolean, owner: string): Promise<ClaimedRow[]> {
   const client = await pool.connect();
@@ -138,6 +181,16 @@ async function claimBatch(includeFailed: boolean, owner: string): Promise<Claime
       WHERE xo.id = candidates.id
       RETURNING xo.id, xo.statement_json AS "statementJson", xo.attempts
     `, [statuses, MAX_ATTEMPTS, MAX_BATCH, owner]);
+    for (const row of claimed.rows) {
+      const normalized = normalizeSaifStatementNamespace(row.statementJson);
+      if (JSON.stringify(normalized) !== JSON.stringify(row.statementJson)) {
+        await client.query(
+          `UPDATE xapi_outbox SET statement_json=$1::jsonb WHERE id=$2 AND lock_owner=$3`,
+          [JSON.stringify(normalized), row.id, owner],
+        );
+        row.statementJson = normalized;
+      }
+    }
     await client.query('COMMIT');
     return claimed.rows;
   } catch (error) {
