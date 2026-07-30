@@ -67,6 +67,48 @@ test('a disabled migrated account cannot sign in', async ({ page }) => {
   await expect(page).toHaveURL(/\/$/);
 });
 
+test('Admin can secure and reactivate a disabled Teacher without exposing the password', async ({ page }) => {
+  const adminPassword = process.env.DEMO_ADMIN_PASSWORD;
+  test.skip(!adminPassword, 'DEMO_ADMIN_PASSWORD is required.');
+  await submitLogin(page, 'demo-admin', adminPassword!);
+  await expect(page).toHaveURL(/\/admin\/students/);
+
+  const before = await page.request.get('/api/admin/teachers');
+  expect(before.status()).toBe(200);
+  const disabledTeacher = (await before.json()).teachers.find(
+    (teacher: { username: string }) => teacher.username === disabledUsername,
+  ) as { id: number; isActive: boolean; mustChangePassword: boolean };
+  expect(disabledTeacher.isActive).toBe(false);
+
+  const weak = await page.request.patch(`/api/admin/teachers/${disabledTeacher.id}`, {
+    data: { action: 'reset-password', password: 'short' },
+  });
+  expect(weak.status()).toBe(400);
+
+  const temporaryPassword = `${randomBytes(18).toString('base64url')}dD4!`;
+  const secured = await page.request.patch(`/api/admin/teachers/${disabledTeacher.id}`, {
+    data: { action: 'reset-password', password: temporaryPassword },
+  });
+  expect(secured.status()).toBe(200);
+  const securedBody = await secured.text();
+  expect(securedBody).not.toContain(temporaryPassword);
+  expect(JSON.parse(securedBody).teacher).toMatchObject({
+    isActive: true,
+    mustChangePassword: true,
+  });
+
+  const loginResponse = await fetch(
+    new URL('/api/auth/login', test.info().project.use.baseURL as string),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: disabledUsername, password: temporaryPassword }),
+    },
+  );
+  expect(loginResponse.status).toBe(200);
+  expect((await loginResponse.json()).user.mustChangePassword).toBe(true);
+});
+
 test('Admin-created learners require a strong temporary password and a forced change', async ({ page }) => {
   const adminPassword = process.env.DEMO_ADMIN_PASSWORD;
   test.skip(!adminPassword, 'DEMO_ADMIN_PASSWORD is required.');
@@ -87,12 +129,36 @@ test('Admin-created learners require a strong temporary password and a forced ch
   const studentId = (await created.json()).student.id as number;
 
   try {
+    const disabled = await page.request.patch(`/api/students/${studentId}`, {
+      data: { isActive: false },
+    });
+    expect(disabled.status()).toBe(200);
+    const afterDisable = await page.request.get('/api/students');
+    const disabledStudent = (await afterDisable.json()).students.find(
+      (student: { id: number }) => student.id === studentId,
+    );
+    expect(disabledStudent.isActive).toBe(false);
+
+    const replacementPassword = `${randomBytes(18).toString('base64url')}eE5!`;
+    const secured = await page.request.patch(`/api/students/${studentId}`, {
+      data: { password: replacementPassword, isActive: true },
+    });
+    expect(secured.status()).toBe(200);
+    const securedBody = await secured.text();
+    expect(securedBody).not.toContain(replacementPassword);
+
+    const afterSecure = await page.request.get('/api/students');
+    const activeStudent = (await afterSecure.json()).students.find(
+      (student: { id: number }) => student.id === studentId,
+    );
+    expect(activeStudent.isActive).toBe(true);
+
     const loginResponse = await fetch(
       new URL('/api/auth/login', test.info().project.use.baseURL as string),
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: uniqueNumber, password: temporaryPassword }),
+        body: JSON.stringify({ username: uniqueNumber, password: replacementPassword }),
       },
     );
     expect(loginResponse.status).toBe(200);

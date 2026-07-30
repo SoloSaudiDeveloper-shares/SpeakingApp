@@ -19,7 +19,8 @@ import { userAccounts, sessions } from '../db/schema';
 // ─── STUDENTS ────────────────────────────────────────────────────────────────
 
 export async function getStudents() {
-  // Join students with userAccounts to include the userId for impersonation
+  // A migrated profile may remain available for historical reporting while
+  // its weak login is disabled, so show the linked account state when present.
   const rows = (await db
     .select({
       id: students.id,
@@ -27,7 +28,8 @@ export async function getStudents() {
       fullName: students.fullName,
       class: students.class,
       cefrBand: students.cefrBand,
-      isActive: students.isActive,
+      studentIsActive: students.isActive,
+      accountIsActive: userAccounts.isActive,
       notes: students.notes,
       diagnosticJson: students.diagnosticJson,
       onboardedAt: students.onboardedAt,
@@ -35,8 +37,9 @@ export async function getStudents() {
     })
     .from(students)
     .leftJoin(userAccounts, eq(userAccounts.studentId, students.id)));
-  return rows.map((row) => ({
+  return rows.map(({ studentIsActive, accountIsActive, ...row }) => ({
     ...row,
+    isActive: row.userId ? Boolean(accountIsActive) : studentIsActive,
     hasDiagnostic: !!row.diagnosticJson,
     diagnosticTakenAt: (() => {
       if (!row.diagnosticJson) return null;
@@ -48,6 +51,72 @@ export async function getStudents() {
       }
     })(),
   }));
+}
+
+export async function getTeacherAccounts() {
+  return db
+    .select({
+      id: userAccounts.id,
+      username: userAccounts.username,
+      displayName: userAccounts.displayName,
+      isActive: userAccounts.isActive,
+      mustChangePassword: userAccounts.mustChangePassword,
+      lastLoginAt: userAccounts.lastLoginAt,
+      createdAt: userAccounts.createdAt,
+    })
+    .from(userAccounts)
+    .where(eq(userAccounts.role, 'Teacher'))
+    .orderBy(userAccounts.username);
+}
+
+export async function resetTeacherPasswordAndActivate(id: number, password: string) {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`Password must contain at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+
+  return db.transaction(async (tx) => {
+    const [account] = await tx
+      .update(userAccounts)
+      .set({
+        passwordHash: hashPassword(password),
+        isActive: true,
+        mustChangePassword: true,
+      })
+      .where(and(eq(userAccounts.id, id), eq(userAccounts.role, 'Teacher')))
+      .returning({
+        id: userAccounts.id,
+        username: userAccounts.username,
+        displayName: userAccounts.displayName,
+        isActive: userAccounts.isActive,
+        mustChangePassword: userAccounts.mustChangePassword,
+        lastLoginAt: userAccounts.lastLoginAt,
+        createdAt: userAccounts.createdAt,
+      });
+    if (!account) throw new Error('Teacher account not found.');
+    await tx.delete(sessions).where(eq(sessions.userId, account.id));
+    return account;
+  });
+}
+
+export async function deactivateTeacherAccount(id: number) {
+  return db.transaction(async (tx) => {
+    const [account] = await tx
+      .update(userAccounts)
+      .set({ isActive: false })
+      .where(and(eq(userAccounts.id, id), eq(userAccounts.role, 'Teacher')))
+      .returning({
+        id: userAccounts.id,
+        username: userAccounts.username,
+        displayName: userAccounts.displayName,
+        isActive: userAccounts.isActive,
+        mustChangePassword: userAccounts.mustChangePassword,
+        lastLoginAt: userAccounts.lastLoginAt,
+        createdAt: userAccounts.createdAt,
+      });
+    if (!account) throw new Error('Teacher account not found.');
+    await tx.delete(sessions).where(eq(sessions.userId, account.id));
+    return account;
+  });
 }
 
 export async function getStudent(id: number) {
@@ -134,7 +203,11 @@ export async function updateStudent(
       .where(eq(userAccounts.studentId, id)));
   }
 
-  if (data.isActive !== undefined) {
+  // When a disabled login is being secured and reactivated, do not enable it
+  // before the new password hash is committed. The password transaction below
+  // applies both changes atomically.
+  const activateWithPassword = data.isActive === true && Boolean(data.password);
+  if (data.isActive !== undefined && !activateWithPassword) {
     await db.update(userAccounts)
       .set({ isActive: data.isActive })
       .where(eq(userAccounts.studentId, id));
@@ -148,6 +221,7 @@ export async function updateStudent(
         .set({
           passwordHash: hashPassword(data.password!),
           mustChangePassword: true,
+          ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
         })
         .where(eq(userAccounts.studentId, id))
         .returning({ id: userAccounts.id });

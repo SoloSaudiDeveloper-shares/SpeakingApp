@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { Plus, Loader2, Pencil, Trash2, KeyRound, X, Check, RotateCcw } from "lucide-react"
+import { TemporaryPasswordDialog } from "@/components/admin/temporary-password-dialog"
 
 interface Student {
   id: number
@@ -28,6 +29,7 @@ export default function AdminStudentsPage() {
   const [bulkClass, setBulkClass] = useState<string>("")
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [formError, setFormError] = useState<string | null>(null)
+  const [passwordTarget, setPasswordTarget] = useState<Student | null>(null)
 
   const load = () => {
     Promise.all([
@@ -102,24 +104,21 @@ export default function AdminStudentsPage() {
     load()
   }
 
-  const handleResetPassword = async (id: number, uniqueNumber: string) => {
-    const newPw = prompt(`Set a temporary password of at least 12 characters for ${uniqueNumber}:`)
-    if (!newPw) return
-    if (newPw.length < 12) {
-      alert("Password must be at least 12 characters.")
-      return
-    }
-    const response = await fetch(`/api/students/${id}`, {
+  const handleResetPassword = async (student: Student, newPassword: string) => {
+    const response = await fetch(`/api/students/${student.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: newPw }),
+      body: JSON.stringify({
+        password: newPassword,
+        ...(student.isActive ? {} : { isActive: true }),
+      }),
     })
     if (!response.ok) {
       const data = await response.json().catch(() => ({}))
-      alert(data?.error ?? "Password could not be updated.")
-      return
+      return data?.error ?? "Password could not be updated."
     }
-    alert("Temporary password updated. Existing sessions were revoked and the student must change it at next sign-in.")
+    setPasswordTarget(null)
+    load()
   }
 
   const handleResetDiagnostic = async (id: number, name: string) => {
@@ -322,7 +321,7 @@ export default function AdminStudentsPage() {
                         </>
                       ) : (
                         <>
-                          <button onClick={() => handleResetPassword(s.id, s.uniqueNumber)} className="p-1.5 rounded text-muted-foreground hover:bg-muted" title="Reset password">
+                          <button onClick={() => setPasswordTarget(s)} className="p-1.5 rounded text-muted-foreground hover:bg-muted" title={s.isActive ? "Reset password" : "Set password and activate"}>
                             <KeyRound size={14} />
                           </button>
                           <button onClick={() => handleResetDiagnostic(s.id, s.fullName)} className="p-1.5 rounded text-muted-foreground hover:bg-muted" title="Reset speaking check">
@@ -351,6 +350,19 @@ export default function AdminStudentsPage() {
       <datalist id="class-suggestions">
         {classes.map((c) => <option key={c} value={c} />)}
       </datalist>
+      {passwordTarget && (
+        <TemporaryPasswordDialog
+          title={passwordTarget.isActive ? "Reset student password" : "Secure and activate student"}
+          description={
+            passwordTarget.isActive
+              ? `Set a temporary password for ${passwordTarget.uniqueNumber}.`
+              : `${passwordTarget.uniqueNumber} is disabled. A new temporary password will secure and reactivate the login.`
+          }
+          confirmLabel={passwordTarget.isActive ? "Reset password" : "Set password and activate"}
+          onCancel={() => setPasswordTarget(null)}
+          onConfirm={(password) => handleResetPassword(passwordTarget, password)}
+        />
+      )}
     </div>
   )
 }

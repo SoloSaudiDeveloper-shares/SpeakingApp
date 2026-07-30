@@ -33,6 +33,7 @@ import {
   Gauge,
   Target,
   LibraryBig,
+  UserCog,
 } from "lucide-react"
 import { cn } from "@/lib/utils/cn"
 
@@ -95,6 +96,7 @@ const teacherLinks: NavItem[] = [
 
 const adminLinks: NavItem[] = [
   { label: "Students",       href: "/admin/students",        icon: Users        },
+  { label: "Teachers",       href: "/admin/teachers",        icon: UserCog      },
   { label: "Books",          href: "/admin/books",           icon: BookOpen     },
   { label: "Cycles",         href: "/admin/cycles",          icon: CalendarDays },
   { label: "Practice Sets",  href: "/admin/practice-sets",   icon: Pencil       },
